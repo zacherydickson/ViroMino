@@ -1,0 +1,3 @@
+[submodule "BashFunctionLibrary"]
+	path = BashFunctionLibrary
+	url = https://github.com/zacherydickson/BashFunctionLibrary.git
