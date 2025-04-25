@@ -1,11 +1,12 @@
 #!/bin/bash
 set -o pipefail
 
-source "$BASHVARLIB/ExitStates.sh"
-source "$BASHFUNCLIB/CheckDependency.sh"
-source "$BASHFUNCLIB/CheckFile.sh"
-source "$BASHFUNCLIB/IsNumeric.sh"
-source "$BASHFUNCLIB/JoinBy.sh"
+ExecDir="$(dirname $(readlink -f "$0"))"
+source "$ExecDir/BashFunctionLibrary/variables/ExitStates.sh"
+source "$ExecDir/BashFunctionLibrary/functions/CheckDependency.sh"
+source "$ExecDir/BashFunctionLibrary/functions/CheckFile.sh"
+source "$ExecDir/BashFunctionLibrary/functions/IsNumeric.sh"
+source "$ExecDir/BashFunctionLibrary/functions/JoinBy.sh"
 
 ##Default Values
 MaxThreads=$(grep -c '^proc' /proc/cpuinfo)
