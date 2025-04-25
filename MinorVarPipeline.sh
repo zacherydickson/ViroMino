@@ -228,7 +228,7 @@ function Call {
             ;;
     esac
     failCount=0;
-    #TODO: This could be parallelized
+    #TODO: This could potentially be parallelized
     for id in "${IDList[@]}"; do
         RawVCFMap["$caller:$id"]="$CallDir/$id-$caller-raw.vcf.gz"
         #If the call file already exists, delete it
@@ -258,8 +258,23 @@ function Call_lofreq {
         return "$EXIT_FAILURE"
     fi
     lofreq indelqual --dindel --ref "$refFile" "$alnFile" |
-        lofreq call --ref "$refFile" --call-indels -
-    #TODO: Ensure consistent output fields
+        lofreq call --ref "$refFile" --call-indels - |
+        awk ' #Add FORMAT/AD to match 
+            BEGIN {OFS="\t"}
+            /^##/{print; next}
+            /^#/ {
+                print "##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Number of observations for each allele\">"
+                print $0,FORMAT,unknown
+                next
+            }
+            {
+                match($8,/DP4=([0-9]+,){3}[0-9]+/);
+                split(substr($8,RSTART+4,RLENGTH-4),dp4,",");
+                ad=dp4[1]+dp4[2]","dp4[3]+dp4[4]
+                print $0,"AD",ad
+            }
+
+        '
 }
 
 #Run the variant caller freebayes on the samples
@@ -268,7 +283,6 @@ function Call_freebayes {
     local refFile=$1; shift
     local alnFile=$1; shift
     freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile"
-    #TODO: Ensure consistent output fields
 }
 
 
