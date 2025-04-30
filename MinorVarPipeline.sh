@@ -1,12 +1,13 @@
 #!/bin/bash
 set -o pipefail
 
-ExecDir="$(dirname $(readlink -f "$0"))"
+ExecDir="$(dirname "$(readlink -f "$0")")"
 source "$ExecDir/BashFunctionLibrary/variables/ExitStates.sh"
 source "$ExecDir/BashFunctionLibrary/functions/CheckDependency.sh"
 source "$ExecDir/BashFunctionLibrary/functions/CheckFile.sh"
 source "$ExecDir/BashFunctionLibrary/functions/IsNumeric.sh"
 source "$ExecDir/BashFunctionLibrary/functions/JoinBy.sh"
+source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
 
 ##Default Values
 MaxThreads=$(grep -c '^proc' /proc/cpuinfo)
@@ -27,12 +28,15 @@ declare -A RawVCFMap
 declare -a IDList
 ExclusionBedFile=""
 MinMapQual=30
+MaxHRUN=5
+MinMAC=6
+MaxRPB=13
 
 
 ##HANDLE INPUTS
 
 function usage {
-	>&2 echo -e "Usage: $(basename $0) Meta.txt ref.fna[.gz] refIndex\n" \
+	>&2 echo -e "Usage: $(basename "$0") Meta.txt ref.fna[.gz] refIndex\n" \
 		"===This script is intended to operate on a set of samples\n" \
 		"\twith a common origin. Run multiple instances otherwise\n" \
         "===INPUTS\n" \
@@ -41,60 +45,84 @@ function usage {
         "\tref.fna\tFasta formatted (optionally gzipped) reference sequence\n" \
         "\trefIndex\tPrefix for the indexed reference to use\n" \
 		"===OPTIONS\n" \
-        "\t-q [0,∞)=$MinMapQual\tMinimum mapping quality for reads\n" \
+        "\t-m [1,∞)εZ=$MinMAC\tThe minimum number of reads supporting a minor allele\n" \
+        "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
+        "\t-q [0,∞)εR=$MinMapQual\tMinimum mapping quality for reads\n" \
+        "\t-r [0,∞)εZ=$MaxHRUN\tThe maximum allowable homopolymer length near an indel\n" \
         "\t-t [1,$MaxThreads]=$NThread\tNumber of threads to use\n" \
-        "\t-w PATH=$WorkdDir\tA working directory for intermediate files;\n" \
+        "\t-w PATH=$WorkDir\tA working directory for intermediate files;\n" \
         "\t\tWill be created if necessary\n" \
         "\t-x PATH\tA bed formatted file defining genomic regions to exclude from analysis\n" \
 		"===FLAGS\n" \
         "\t-f\tForce execution of all pipeline steps\n" \
-		"\t-h\tDisplay this message and exit"
+		"\t-h\tDisplay this message and exit" \
         ;
 }
 
-while getopts "q:t:w:fh" opts; do
-	case $opts in
-        q)
-            MinMapQual="$OPTARG"
-            IsNumeric "$MinMapQual" NonNegReal || exit "$EXIT_FAILURE"
-        t)
-            NThread="$OPTARG";
-            IsNumeric "$NThread" PosInt || exit "$EXIT_FAILURE"
-            ;;
-        w)
-            WorkDir="$OPTARG"
-            ;;
-        x)
-            ExclusionBedFile="$OPTARG"
-            CheckFile "$ExclusionBedFile" "Exclusion Bed File" || exit "$EXIT_FAILURE"
-            ;;
-        f)
-            Force=1
-            ;;
-		h)
-			usage;
-            exit $EXIT_FAILURE;
-			;;
-	esac
-done
-shift $((OPTIND-1));
 
-if [ "$#" -lt 2 ]; then
-	usage;
-	exit $EXIT_FAILURE;
-fi
-
-CheckDependency lofreq      || exit "$EXIT_FAILURE";
-CheckDependency bcftools    || exit "$EXIT_FAILURE";
-CheckDependency samtools    || exit "$EXIT_FAILURE";
-CheckDependency freebayes   || exit "$EXIT_FAILURE";
-CheckDependency bowtie2     || exit "$EXIT_FAILURE";
-CheckDependency fastp       || exit "$EXIT_FAILURE";
-CheckDependency bgzip       || exit "$EXIT_FAILURE";
 
 ### MAIN
 
 function main {
+    #Process Options
+    while getopts "m:p:q:r:t:w:x:fh" opts; do
+    	case $opts in
+            m)
+                MinMAC="$OPTARG"
+                IsNumeric "$MinMAC" Natural || exit "$EXIT_FAILURE"
+                ;;
+            p)
+                MaxRPB="$OPTARG"
+                IsNumeric "$MaxRPB" NonNegReal || exit "$EXIT_FAILURE"
+                ;;
+            q)
+                MinMapQual="$OPTARG"
+                IsNumeric "$MinMapQual" NonNegReal || exit "$EXIT_FAILURE"
+                ;;
+            r)
+                MaxHRUN="$OPTARG"
+                IsNumeric "$MaxHRUN" Whole || exit "$EXIT_FAILURE"
+                ;;
+            t)
+                NThread="$OPTARG";
+                IsNumeric "$NThread" PosInt || exit "$EXIT_FAILURE"
+                ;;
+            w)
+                WorkDir="$OPTARG"
+                ;;
+            x)
+                ExclusionBedFile="$OPTARG"
+                CheckFile "$ExclusionBedFile" "Exclusion Bed File" || exit "$EXIT_FAILURE"
+                ;;
+            f)
+                Force=1
+                ;;
+    		h)
+    			usage;
+                exit "$EXIT_FAILURE";
+    			;;
+            *)
+                >&2 echo "Unrecognized Option ($opts)"
+                usage;
+                exit "$EXIT_FAILURE";
+                ;;
+    	esac
+    done
+    shift $((OPTIND-1));
+    #Check Args 
+    if [ "$#" -lt 2 ]; then
+    	usage;
+    	exit "$EXIT_FAILURE";
+    fi
+    #Check dependencies 
+    CheckDependency lofreq      || exit "$EXIT_FAILURE";
+    CheckDependency bcftools    || exit "$EXIT_FAILURE";
+    CheckDependency samtools    || exit "$EXIT_FAILURE";
+    CheckDependency freebayes   || exit "$EXIT_FAILURE";
+    CheckDependency bowtie2     || exit "$EXIT_FAILURE";
+    CheckDependency fastp       || exit "$EXIT_FAILURE";
+    CheckDependency bgzip       || exit "$EXIT_FAILURE";
+    #Start
     local metaFile="$1"; shift
     local refFile="$1"; shift
     local refIndex="$1"; shift
@@ -110,8 +138,11 @@ function main {
 	#Align the reads
     Align "$metaFile" "$refIndex" || exit "$EXIT_FAILURE"
 	#Call MV Sites with different callers
-    Call "$metaFile" "$refFile" lofreq || exit "$EXIT_FAILURE" 
-    Call "$metaFile" "$refFile" freebayes || exit "$EXIT_FAILURE" 
+    for vCaller in lofreq freebayes; do
+        Call "$metaFile" "$refFile" $vCaller || exit "$EXIT_FAILURE" 
+    done
+    #Filter down to one set of mv sites supported by all variant callers
+    Filter "$metaFile" || exit "$EXIT_FAILURE"
 	#Apply Filters to each set of calls, exclusion regions
     #Need to split results to Allelic Primatives and RPB
 	#Retain Calls from both methods
@@ -181,13 +212,13 @@ function Align {
         #Construct and globally store the aligned file name
         AlignedFileMap["$id"]="$AlignDir/$id.bam"
         #If not forcing and the alignment file exists skip this id
-        [ "$Force" -eq 0 ] && [ -f "$AlignedFileMap["$id"]" ] && continue;
-        unpairedStr=$(JoinBy , ${ProcessedFileMap["$id:1U"]} ${ProcessedFileMap["$id:2U"]})
+        [ "$Force" -eq 0 ] && [ -f "${AlignedFileMap["$id"]}" ] && continue;
+        unpairedStr=$(JoinBy , "${ProcessedFileMap["$id:1U"]}" "${ProcessedFileMap["$id:2U"]}")
         #Run Bowtie 2, then filter out unmapped and low mapQ reads and sort
         bowtie2 --threads "$NThread" --very-sensitive -x "$refIndex" \
                 -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" \
                 -U "$unpairedStr" 2>| "$AlignDir/$id.log" |
-            samtools view -h -F0x4 -q "$MinMapQaul" - |
+            samtools view -h -F0x4 -q "$MinMapQual" - |
             samtools sort > "${AlignedFileMap["$id"]}"
         #Check for failure
         if [ "$?" -ne 0 ]; then
@@ -209,22 +240,17 @@ function Call {
     local refFile="$1"; shift
     local caller="$1"; shift
     mkdir -p "$CallDir"
-    exitCode=0;
     callFunc="";
     case "$caller" in
         lofreq)
             callFunc="Call_lofreq"
-            Call_lofreq "$metaFile" "$refFile"
-            exitCode="$?"
             ;;
         freebayes)
             callFunc="Call_freebayes"
-            Call_freebayes "$metaFile" "$refFile"
-            exitCode="$?"
             ;;
         *)
             >&2 echo "[ERROR] Unrecognized variant caller ($caller)"
-            return $(wc -l "$metaFile")
+            return "$(wc -l "$metaFile")"
             ;;
     esac
     failCount=0;
@@ -233,10 +259,10 @@ function Call {
         RawVCFMap["$caller:$id"]="$CallDir/$id-$caller-raw.vcf.gz"
         #If the call file already exists, delete it
         [ "$Force" -eq 0 ] && [ -f "${RawVCFMap["$caller:$id"]}" ] && continue;
-        #Make the variant calls with teh caller
+        #Make the variant calls with the caller
         "$callFunc" "$id" "$refFile" "${AlignedFileMap["$id"]}" \
             2>| "$CallDir/$id-$caller-raw.log" |
-            bgzip > "$RawVCFMap[$caller:$id]"
+            bgzip > "${RawVCFMap[$caller:$id]}"
         #Check for failure
         if [ "$?" -ne 0 ]; then
             >&2 echo "[ERROR] lofreq calling failure for $id"
@@ -264,7 +290,7 @@ function Call_lofreq {
             /^##/{print; next}
             /^#/ {
                 print "##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Number of observations for each allele\">"
-                print $0,FORMAT,unknown
+                print $0,"FORMAT","unknown"
                 next
             }
             {
@@ -282,10 +308,74 @@ function Call_freebayes {
     local id=$1; shift;
     local refFile=$1; shift
     local alnFile=$1; shift
-    freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile"
+    tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
+    freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" >| "$tmpFile"
+    #Check if freeebays worked before continuing
+    if [ "$?" -ne 0 ]; then
+        >&2 echo "[ERROR] freebayes failure for $id"
+        rm -f "$tmpFile"
+        return "$EXIT_FAILURE"
+    fi
+    #Calculate the value of HRUN for the INDELS
+    AddHRUN2freebays "$tmpFile" "$refFile" || return "$EXIT_FAILURE"
+    rm -f "$tmpFile"
 }
 
+#Determines the HRUN value for freebayes variants
+#Inputs - a freebayes generated vcf, uncompressed
+#       - a reference sequence
+#Output - a vcffile with added INFO fields for HRUN
+function AddHRUN2freebayes {
+    vcfFile="$1"; shift
+    refFile="$1"; shift
+    tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
+    bcftools norm -m- --force -a "$vcfFile" |
+        bcftools query -f "%CHROM\t%POS\t%REF\t%ALT\n" |
+        awk -v slop=$((MaxHRUN * 2 + 2)) ' #Convert to bed region of interest
+            BEGIN {OFS="\t"}
+            {rl=length($3); al=length($4);}
+            (rl != al){print $1,$2,$2+slop}
+        ' |
+        bedtools getfasta -fi "$refFile" -bed - |
+        awk ' #Get the HRUN Length
+            BEGIN{OFS="\t"}
+            /^>/{split(substr($1,2),a,":|-"); chrom=a[1];pos=a[2];next}
+            {l=length($0); sub(substr($0,1,1)"+","",$0); print chrom,pos,l-length($0)}
+        ' > "$tmpFile"
+    if [ "$?" -ne 0 ]; then
+        >&2 echo "[ERROR] Failure to Calculate Freebayes HRUN for $id"
+        rm -f "$tmpFile"
+        return "$EXIT_FAILURE"
+    fi
+    awk '
+        BEGIN{OFS="\t"}
+        (ARGIND == 1){HRUN[$1,$2]=$3;next}
+        /^##/{print;next}
+        /^#CHROM/{
+            Desc = "Homopolymer length to the right of report indel position"
+            print "##INFO=<ID=HRUN,Number=1,Type=Integer,Description=\""Desc"\">";
+            print; next
+        }
+        (HRUN[$1,$2]){$8=$8";HRUN="HRUN[$1,$2]}1
+    ' "$tmpFile" "$vcfFile" || return "$EXIT_FAILURE"
+    #Todo add the annotations to the vcf file
+    rm -f "$tmpFile" 
+}
 
+#Runs a series of filters on a raw vcf files
+# The vcf files must have AD in the format field, and HRUN Info for Indels
+# Read Position Bias Information will be Added at this step
+# Exclusion regions will be removed at this step
+#Inputs - a metadata file 
+function Filter {
+    #TODO:
+    for label in "${!RawVCFMap[@]}"; do 
+        IFS=":" read -r id vCaller <<< "$label";
+        Filter "${RawVCFMap["$label"]}" 
+    done
+}
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS
-main "$@"
+if [ "${BASH_SOURCE[0]}" == "${0}" ]; then 
+    main "$@"
+fi
