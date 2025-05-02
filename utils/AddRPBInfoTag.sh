@@ -4,7 +4,7 @@ set -o pipefail
 
 ExecDir="$(dirname "$(readlink -f "$0")")"
 Positioner="$ExecDir/getReadPositionsByAllelle.pl"
-RPBCalculator="$ExecDir/readPosByAlleleMannWhitneyTest.R"
+RPBCalculator="$ExecDir/readPosByAlleleTest.R"
 
 
 if [ "$#" -lt 2 ]; then

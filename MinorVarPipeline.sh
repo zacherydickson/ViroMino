@@ -8,6 +8,7 @@ source "$ExecDir/BashFunctionLibrary/functions/CheckFile.sh"
 source "$ExecDir/BashFunctionLibrary/functions/IsNumeric.sh"
 source "$ExecDir/BashFunctionLibrary/functions/JoinBy.sh"
 source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
+RPBCmd="$ExecDir/util/AddRPBInfoTag.sh"
 
 ##Default Values
 MaxThreads=$(grep -c '^proc' /proc/cpuinfo)
@@ -25,6 +26,7 @@ CallDir="$WorkDir/calls"
 declare -A ProcessedFileMap
 declare -A AlignedFileMap
 declare -A RawVCFMap
+declare -A FilteredVCFMap
 declare -a IDList
 ExclusionBedFile=""
 MinMapQual=30
@@ -44,6 +46,15 @@ function usage {
         "\t\tNote: will be accessed multiple times, cannot be temporary\n" \
         "\tref.fna\tFasta formatted (optionally gzipped) reference sequence\n" \
         "\trefIndex\tPrefix for the indexed reference to use\n" \
+        "===OUTPUT\n" \
+        "\tCreates the Working directory with the following subfolder and files:\n" \
+        "\t processedReads\tThe quality and adapter trimmed reads\n" \
+        "\t alignments\tThe bam files from aligning to the reference\n" \
+        "\t calls\tBoth raw and filtered calls for each sample with each caller\n" \
+        "\t commonCalls.tsv\tThe mv sites which were agreed upon by all callers\n" \
+        "\t expanded.vcf.gz\tThe information at all common sites, even if the site was not\n" \
+        "\t\t called in a particular sample\n" \
+        "\t\thaplotyped.vcf.gz\tSame info as expanded, but with nearby variants combined\n" \
 		"===OPTIONS\n" \
         "\t-m [1,∞)εZ=$MinMAC\tThe minimum number of reads supporting a minor allele\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
@@ -141,12 +152,13 @@ function main {
     for vCaller in lofreq freebayes; do
         Call "$metaFile" "$refFile" $vCaller || exit "$EXIT_FAILURE" 
     done
-    #Filter down to one set of mv sites supported by all variant callers
+    #Filter each individual set of calls 
     Filter "$metaFile" || exit "$EXIT_FAILURE"
-	#Apply Filters to each set of calls, exclusion regions
-    #Need to split results to Allelic Primatives and RPB
+    #Then we normalize and atomize variants
+    #then we cross check
 	#Retain Calls from both methods
 	#	re-expand sites which were retained in at least one sample
+    #Attempt Haplotype Calling
 	#Report the final set of calls	
 }
 
@@ -207,7 +219,7 @@ function Align {
     local metaFile="$1"; shift
     local refIndex="$2"; shift
     mkdir -p "$AlignDir"
-    failCount=0;
+    local failCount=0;
     for id in "${IDList[@]}"; do
         #Construct and globally store the aligned file name
         AlignedFileMap["$id"]="$AlignDir/$id.bam"
@@ -219,7 +231,7 @@ function Align {
                 -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" \
                 -U "$unpairedStr" 2>| "$AlignDir/$id.log" |
             samtools view -h -F0x4 -q "$MinMapQual" - |
-            samtools sort > "${AlignedFileMap["$id"]}"
+            samtools sort >| "${AlignedFileMap["$id"]}"
         #Check for failure
         if [ "$?" -ne 0 ]; then
             >&2 echo "[ERROR] Bowtie2/samtools failure for $id"
@@ -253,16 +265,16 @@ function Call {
             return "$(wc -l "$metaFile")"
             ;;
     esac
-    failCount=0;
+    local failCount=0;
     #TODO: This could potentially be parallelized
     for id in "${IDList[@]}"; do
         RawVCFMap["$caller:$id"]="$CallDir/$id-$caller-raw.vcf.gz"
-        #If the call file already exists, delete it
+        #If the call file already exists, skip
         [ "$Force" -eq 0 ] && [ -f "${RawVCFMap["$caller:$id"]}" ] && continue;
         #Make the variant calls with the caller
         "$callFunc" "$id" "$refFile" "${AlignedFileMap["$id"]}" \
             2>| "$CallDir/$id-$caller-raw.log" |
-            bgzip > "${RawVCFMap[$caller:$id]}"
+            bgzip >| "${RawVCFMap[$caller:$id]}"
         #Check for failure
         if [ "$?" -ne 0 ]; then
             >&2 echo "[ERROR] lofreq calling failure for $id"
@@ -308,8 +320,10 @@ function Call_freebayes {
     local id=$1; shift;
     local refFile=$1; shift
     local alnFile=$1; shift
-    tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
-    freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" >| "$tmpFile"
+    local tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
+    #Call freebayes, then filter non-minor variant sites (mac < 1)
+    freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" |
+        FilterVCFByMac /dev/stdin 1 >| "$tmpFile"
     #Check if freeebays worked before continuing
     if [ "$?" -ne 0 ]; then
         >&2 echo "[ERROR] freebayes failure for $id"
@@ -317,8 +331,31 @@ function Call_freebayes {
         return "$EXIT_FAILURE"
     fi
     #Calculate the value of HRUN for the INDELS
-    AddHRUN2freebays "$tmpFile" "$refFile" || return "$EXIT_FAILURE"
+    AddHRUN2freebayes "$tmpFile" "$refFile" || return "$EXIT_FAILURE"
     rm -f "$tmpFile"
+}
+
+#Filters out sites where the MAC is lower than some thereshold
+#   specifically it ensures there are at least 2 allelic depths greater than the threshold
+#   this allows a sample with two non-reference alleles to pass
+#Inputs - an uncompressed vcf file with a FORMAT AD field
+#       - the MAC threshold to use
+#Output - print to stdout the filtered vcf file
+function FilterVCFByMAC {
+    local vcf="$1"; shift
+    local thresh="$1"; shift
+    awk -v mac="$thresh" '
+        /^#/{print;next}
+        {   
+            n=split($9,fmt,":");
+            ADidx=-1; for(i=1;i<=n;i++){if(fmt[i]=="AD"){ADidx=i;break}}
+            if(ADidx==-1){exit 1}
+            split($10,val,":");
+            n=split(val[ADidx],AD,",");
+            nPass=0; for(i=1;i<=n;i++){if(AD[i]>=mac){nPass++}}
+        }
+        (nPass>1)
+    '  "$vcf"
 }
 
 #Determines the HRUN value for freebayes variants
@@ -326,9 +363,9 @@ function Call_freebayes {
 #       - a reference sequence
 #Output - a vcffile with added INFO fields for HRUN
 function AddHRUN2freebayes {
-    vcfFile="$1"; shift
-    refFile="$1"; shift
-    tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
+    local vcfFile="$1"; shift
+    local refFile="$1"; shift
+    local tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
     bcftools norm -m- --force -a "$vcfFile" |
         bcftools query -f "%CHROM\t%POS\t%REF\t%ALT\n" |
         awk -v slop=$((MaxHRUN * 2 + 2)) ' #Convert to bed region of interest
@@ -368,11 +405,60 @@ function AddHRUN2freebayes {
 # Exclusion regions will be removed at this step
 #Inputs - a metadata file 
 function Filter {
+    metafile="$1" shift;
+    local label=""
+    local id=""
+    local vCaller="";
     #TODO:
+    #First need to filter out any variants in the excluded regions
+    #Then We add RPB values to the results
+    #Then we filter on MAC, RPB, and HRUN
+    local failCount=0
     for label in "${!RawVCFMap[@]}"; do 
         IFS=":" read -r id vCaller <<< "$label";
-        Filter "${RawVCFMap["$label"]}" 
+        FilteredVCFMap["$label"]="$CallDir/$id-$caller-filt.vcf.gz"
+        #If the call file already exists, skip
+        [ "$Force" -eq 0 ] && [ -f "${FilteredVCFMap["$caller:$id"]}" ] && continue;
+        local rawFile="${RawVCFMap["$label"]}" 
+        local filtFile="${FilteredVCFMap["$label"]}" 
+        local tmpFile="$CallDir/filter_$label_$(RandomString 8).tmp.vcf.gz"
+        #Check if an exclusion BED file was provided, if so filter out variants at those sites
+        if [ -n "$ExclusionBedFile" ]; then 
+            if ! cp "$rawFile" "$tmpFile"; then
+                >&2 echo "[ERROR] Failure to copy rawFile for filtering of $label"
+                rm -f "$tmpFile"
+                ((failCount++))
+                continue;
+            fi
+        else
+            if ! bcftools view -T "^$ExclusionBedFile" -o "$tmpFile" -O z "$rawFile"; then
+                >&2 echo "[ERROR] Failure to filter excluded regions for $label"
+                rm -f "$tmpFile"
+                ((failCount++))
+                rm -f "$tmpFile"
+                continue;
+            fi
+        fi
+        #Add RPB tags
+        if ! "$RPBCmd" "${AlignedFileMap["$id"]}" "$tmpFile"; then
+            >&2 echo "[ERROR] Failure to add RPB tag for $label"
+            ((failCount++))
+            continue;
+        fi
+        #Filter by RPB, HRUN, then MAC tags, then Bgzip to final file
+        filterExp="RPB > $MaxRPB || HRUN > $MaxHRUN"
+        bcftools filter -e "$filterExp" "$tmpFile" | 
+            FilterVCFByMAC /dev/stdin "$MinMAC" |
+            bgzip >| "$filtFile"
+        if [ "$?" -ne 0 ]; then
+            >&2 echo "[ERROR] Failure to filter by RPB/MAC/HRUN for $label"
+            ((failCount++))
+            rm -f "$filtFile"
+            continue;
+        fi
+        rm -f "$tmpFile"
     done
+    return "$failCount"
 }
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS
