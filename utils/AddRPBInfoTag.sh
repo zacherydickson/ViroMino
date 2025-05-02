@@ -35,7 +35,7 @@ zcat $inVCF |
 			continue;
 		fi
 		if grep -q '^#' <<< $line; then
-			echo "##INFO=<ID=RPB,Number=A,Type=Integer,Description=\"Phred-scaled read position bias at this position\">" >> $baseVCF;
+			echo "##INFO=<ID=RPB,Number=R,Type=Integer,Description=\"Phred-scaled read position bias at this position\">" >> $baseVCF;
 			echo "$line" >> $baseVCF;
 			continue;
 		fi

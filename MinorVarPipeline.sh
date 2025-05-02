@@ -154,6 +154,7 @@ function main {
     done
     #Filter each individual set of calls 
     Filter "$metaFile" || exit "$EXIT_FAILURE"
+    #TODO:
     #Then we normalize and atomize variants
     #then we cross check
 	#Retain Calls from both methods
@@ -409,10 +410,10 @@ function Filter {
     local label=""
     local id=""
     local vCaller="";
-    #TODO:
     #First need to filter out any variants in the excluded regions
     #Then We add RPB values to the results
-    #Then we filter on MAC, RPB, and HRUN
+    #Then we filter on HRUN, RPB, and MAC: in that order
+    #MAC must come last as the RPB filter can reveal non-minor variant sites which the MAC filter can clean up
     local failCount=0
     for label in "${!RawVCFMap[@]}"; do 
         IFS=":" read -r id vCaller <<< "$label";
@@ -445,9 +446,9 @@ function Filter {
             ((failCount++))
             continue;
         fi
-        #Filter by RPB, HRUN, then MAC tags, then Bgzip to final file
-        filterExp="RPB > $MaxRPB || HRUN > $MaxHRUN"
-        bcftools filter -e "$filterExp" "$tmpFile" | 
+        #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
+        bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
+            FilterVCFByRPB /dev/stdin "$MaxRPB" |
             FilterVCFByMAC /dev/stdin "$MinMAC" |
             bgzip >| "$filtFile"
         if [ "$?" -ne 0 ]; then
@@ -459,6 +460,106 @@ function Filter {
         rm -f "$tmpFile"
     done
     return "$failCount"
+}
+
+#Filters out sites where the RPB is higher than some thereshold
+#   specificially it determines which allelese have RPB less than threshold
+#   sites with less than 2 passing allelese are filtered completely
+#   any failing alleles, and their info tags are removed
+#Inputs - an uncompressed vcf file with an INFO RPB field
+#       - the RPB threshold to use
+#Output - print to stdout the filtered vcf file
+function FilterVCFByRPB {
+    local vcf="$1"; shift;
+    local rpb="$1"; shift;
+    awk -v th="$rpb" '
+        BEGIN {OFS="\t"}
+        /^##INFO/ {
+            split(substr($0,12),a,",");
+            split(a[2],b,"=");
+            InfoNumType[a[1]]=b[2];
+            
+        }
+        /^##FORMAT/ {
+            split(substr($0,14),a,",");
+            split(a[2],b,"=");
+            FormatNumType[a[1]]=b[2];
+        }
+        /^#/{print; next}
+        {
+            n=split($8,info,";")
+            split("",allelePass,"")
+            nPass=0;
+            for(i=1;i<=n;i++){
+                split(info[i],a,"=");
+                key=a[1]
+                val=a[2]
+                if(key=="RPB"){
+                    m=split(val,b,",");
+                    for(j=1;j<=m;j++){
+                        allelePass[j]=0;
+                        if(b[j]<=th){
+                            nPass++
+                            allelePass[j]=1
+                        }
+                    }
+                }
+            }
+            if(nPass < 2){next}
+            nAlt = split($5,a,",")
+            altStr=""
+            for(i=1;i<=nAlt;i++){
+                if(allelePass[i+1]){
+                    altStr=altStr","a[i]
+                }
+            }
+            $5=substr(altStr,2)
+            infoStr=""
+            for(i=1;i<=n;i++){
+                split(info[i],a,"=");
+                key=a[1]
+                val=a[2]
+                numType=InfoNumType[key]
+                if(numType == "A" || numType == "R" || numType == "G"){
+                    m=split(val,b,",")
+                    off = 0
+                    s=","b[1]
+                    if(numType == "A") {s="";off = 1}
+                    for(j=2-off;j<=m;j++){
+                        if(allelePass[j+off]){
+                            s = s "," b[j]
+                        }
+                    }
+                    info[i]=key"="substr(s,2)
+                }
+                infoStr=infoStr";"info[i]
+            }
+            $8=substr(infoStr,2)
+            n=split($9,fmt,":")
+            split($10,format,":")
+            formatStr=""
+            for(i=1;i<=n;i++){
+                key=fmt[i]
+                val=format[i]
+                numType=FormatNumType[key]
+                if(numType == "A" || numType == "R" || numType == "G"){
+                    m=split(val,b,",")
+                    off = 0
+                    s=","b[1]
+                    if(numType == "A") {s="";off = 1}
+                    for(j=2-off;j<=m;j++){
+                        if(allelePass[j+off]){
+                            s = s "," b[j]
+                        }
+                    }
+                    format[i]=substr(s,2)
+                }
+                formatStr=formatStr":"format[i]
+            }
+            $10 = substr(formatStr,2)
+            print
+        }
+    ' "$vcf"
 }
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS
