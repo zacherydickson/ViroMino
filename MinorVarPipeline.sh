@@ -169,6 +169,7 @@ function main {
 #Inputs - MetaFile
 #Output - None, creates fastpOut directory and fills it with results
 #ExitCode - The Number of samples for which fastpFailed
+#TODO: Increase Modularity by splitting into a function that iterates and one that does the work
 function PreProcess {
     local  metaFile="$1"; shift
     mkdir -p "$ProcDir"
@@ -216,6 +217,7 @@ function PreProcess {
 
 ##Run Bowtie2 on all samples
 #Inputs - metaFile
+#TODO: Increase Modularity by splitting into a function that iterates and one that does the work
 function Align {
     local metaFile="$1"; shift
     local refIndex="$2"; shift
@@ -248,6 +250,7 @@ function Align {
 #       - the variant caller to use
 #Output - None
 #ExitCode, the number of ids for which calling failed
+#TODO: Increase Modularity by splitting into a function that iterates and one that does the work
 function Call {
     local metaFile="$1"; shift
     local refFile="$1"; shift
@@ -321,7 +324,8 @@ function Call_freebayes {
     local id=$1; shift;
     local refFile=$1; shift
     local alnFile=$1; shift
-    local tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
+    local tmpFile;
+    tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
     #Call freebayes, then filter non-minor variant sites (mac < 1)
     freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" |
         FilterVCFByMac /dev/stdin 1 >| "$tmpFile"
@@ -366,7 +370,8 @@ function FilterVCFByMAC {
 function AddHRUN2freebayes {
     local vcfFile="$1"; shift
     local refFile="$1"; shift
-    local tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
+    local tmpFile;
+    tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
     bcftools norm -m- --force -a "$vcfFile" |
         bcftools query -f "%CHROM\t%POS\t%REF\t%ALT\n" |
         awk -v slop=$((MaxHRUN * 2 + 2)) ' #Convert to bed region of interest
@@ -405,6 +410,7 @@ function AddHRUN2freebayes {
 # Read Position Bias Information will be Added at this step
 # Exclusion regions will be removed at this step
 #Inputs - a metadata file 
+#TODO: Increase Modularity by splitting into a function that iterates and one that does the work
 function Filter {
     metafile="$1" shift;
     local label=""
@@ -422,7 +428,8 @@ function Filter {
         [ "$Force" -eq 0 ] && [ -f "${FilteredVCFMap["$caller:$id"]}" ] && continue;
         local rawFile="${RawVCFMap["$label"]}" 
         local filtFile="${FilteredVCFMap["$label"]}" 
-        local tmpFile="$CallDir/filter_$label_$(RandomString 8).tmp.vcf.gz"
+        local tmpFile;
+        tmpFile="$CallDir/filter_${label}_$(RandomString 8).tmp.vcf.gz"
         #Check if an exclusion BED file was provided, if so filter out variants at those sites
         if [ -n "$ExclusionBedFile" ]; then 
             if ! cp "$rawFile" "$tmpFile"; then
