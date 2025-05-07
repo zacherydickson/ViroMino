@@ -23,17 +23,22 @@ Force=0;
 ProcDir="$WorkDir/processedReads"
 AlignDir="$WorkDir/alignments"
 CallDir="$WorkDir/calls"
+CommonCallsFile="$WorkDir/CommonCalls.tab"
+ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
+HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
 declare -A ProcessedFileMap
 declare -A AlignedFileMap
 declare -A RawVCFMap
 declare -A FilteredVCFMap
 declare -a IDList
+declare -a VCallerList=(lofreq freebayes);
 ExclusionBedFile=""
 MinMapQual=30
 MaxHRUN=5
 MinMAC=6
 MaxRPB=13
-
+MinNCallers="${#VCallerList[@]}"
+MaxPileupDepth=1000
 
 ##HANDLE INPUTS
 
@@ -42,19 +47,19 @@ function usage {
 		"===This script is intended to operate on a set of samples\n" \
 		"\twith a common origin. Run multiple instances otherwise\n" \
         "===INPUTS\n" \
-        "\tMeta.tab\tsemicolon delim file with columns: ID, Path2Read1, Path2Read2\n" \
+        "\tMeta.txt\tsemicolon delim file with columns: ID, Path2Read1, Path2Read2\n" \
         "\t\tNote: will be accessed multiple times, cannot be temporary\n" \
         "\tref.fna\tFasta formatted (optionally gzipped) reference sequence\n" \
         "\trefIndex\tPrefix for the indexed reference to use\n" \
         "===OUTPUT\n" \
         "\tCreates the Working directory with the following subfolder and files:\n" \
-        "\t processedReads\tThe quality and adapter trimmed reads\n" \
-        "\t alignments\tThe bam files from aligning to the reference\n" \
-        "\t calls\tBoth raw and filtered calls for each sample with each caller\n" \
-        "\t commonCalls.tsv\tThe mv sites which were agreed upon by all callers\n" \
-        "\t expanded.vcf.gz\tThe information at all common sites, even if the site was not\n" \
+        "\t $(basename "$ProcDir")\tThe quality and adapter trimmed reads\n" \
+        "\t $(basename "$AlignDir")\tThe bam files from aligning to the reference\n" \
+        "\t $(basename "$CallDir")\tBoth raw and filtered calls for each sample with each caller\n" \
+        "\t $(basename "$CommonCallsFile")\tThe mv sites which were agreed upon by all callers\n" \
+        "\t $(basename "$ExpandedVCFFile")\tThe information at all common sites, even if the site was not\n" \
         "\t\t called in a particular sample\n" \
-        "\t\thaplotyped.vcf.gz\tSame info as expanded, but with nearby variants combined\n" \
+        "\t $(basename "$HaplotypedVCFFile")\tSame info as expanded, but with nearby variants combined\n" \
 		"===OPTIONS\n" \
         "\t-m [1,∞)εZ=$MinMAC\tThe minimum number of reads supporting a minor allele\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
@@ -144,23 +149,25 @@ function main {
     ProcDir="$WorkDir/processedReads"
     AlignDir="$WorkDir/alignments"
     CallDir="$WorkDir/calls"
-    #PreProcess the fastq Files
+    CommonCallsFile="$WorkDir/CommonCalls.tab"
+    ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
+    HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
+    #PreProcess the fastq Files - Fills in ProcessedFileMap
     PreProcess "$metaFile" || exit "$EXIT_FAILURE"
-	#Align the reads
+	#Align the reads - Fills in AlignedFileMap
     Align "$metaFile" "$refIndex" || exit "$EXIT_FAILURE"
-	#Call MV Sites with different callers
-    for vCaller in lofreq freebayes; do
-        Call "$metaFile" "$refFile" $vCaller || exit "$EXIT_FAILURE" 
+	#Call MV Sites with different callers - Fills in Raw VCF Map
+    for vCaller in "${VCallerList[@]}"; do
+        Call "$metaFile" "$refFile" "$vCaller" || exit "$EXIT_FAILURE" 
     done
-    #Filter each individual set of calls 
-    Filter "$metaFile" || exit "$EXIT_FAILURE"
+    #Filter each individual set of calls  - Fills in FilteredVCFMap
+    FilterCalls "$metaFile" || exit "$EXIT_FAILURE"
+    #Get the set of sites which are common to all callers - creates CommonCalls
+    ReconcileCalls "$metaFile" || exit "$EXIT_FAILURE"
+    #Re-expand sites which were retained in at least one sample - creates ExpandedVCF
+    ReExpand "$metaFile" "$refFile" || exit "$EXIT_FAILURE"
+    #Attempt Haplotype Calling - creates HaplotypedVCF
     #TODO:
-    #Then we normalize and atomize variants
-    #then we cross check
-	#Retain Calls from both methods
-	#	re-expand sites which were retained in at least one sample
-    #Attempt Haplotype Calling
-	#Report the final set of calls	
 }
 
 ### FUNCTION DEFINITIONS
@@ -229,7 +236,7 @@ function Align {
         #If not forcing and the alignment file exists skip this id
         [ "$Force" -eq 0 ] && [ -f "${AlignedFileMap["$id"]}" ] && continue;
         unpairedStr=$(JoinBy , "${ProcessedFileMap["$id:1U"]}" "${ProcessedFileMap["$id:2U"]}")
-        #Run Bowtie 2, then filter out unmapped and low mapQ reads and sort
+        #Run Bowtie 2, then filter out unmapped and low qual reads and sort
         bowtie2 --threads "$NThread" --very-sensitive -x "$refIndex" \
                 -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" \
                 -U "$unpairedStr" 2>| "$AlignDir/$id.log" |
@@ -301,21 +308,27 @@ function Call_lofreq {
     fi
     lofreq indelqual --dindel --ref "$refFile" "$alnFile" |
         lofreq call --ref "$refFile" --call-indels - |
-        awk ' #Add FORMAT/AD to match 
+        awk ' #Add FORMAT/AD,GT to match 
             BEGIN {OFS="\t"}
             /^##/{print; next}
             /^#/ {
+                print "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
                 print "##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Number of observations for each allele\">"
                 print $0,"FORMAT","unknown"
                 next
             }
             {
                 match($8,/DP4=([0-9]+,){3}[0-9]+/);
+                gt=0;
                 split(substr($8,RSTART+4,RLENGTH-4),dp4,",");
-                ad=dp4[1]+dp4[2]","dp4[3]+dp4[4]
-                print $0,"AD",ad
+                ad1 = dp4[1]+dp4[2]
+                ad2 = dp4[3]+dp4[4]
+                if(ad2 > ad1){
+                    gt = 1
+                }
+                ad=ad1","ad2
+                print $0,"GT:AD",gt":"ad
             }
-
         '
 }
 
@@ -332,12 +345,12 @@ function Call_freebayes {
     #Check if freeebays worked before continuing
     if [ "$?" -ne 0 ]; then
         >&2 echo "[ERROR] freebayes failure for $id"
-        rm -f "$tmpFile"
+        rm -f "$tmpFile" "$tmpFile.csi"
         return "$EXIT_FAILURE"
     fi
     #Calculate the value of HRUN for the INDELS
     AddHRUN2freebayes "$tmpFile" "$refFile" || return "$EXIT_FAILURE"
-    rm -f "$tmpFile"
+    rm -f "$tmpFile" "$tmpFile.csi"
 }
 
 #Filters out sites where the MAC is lower than some thereshold
@@ -365,6 +378,7 @@ function FilterVCFByMAC {
 
 #Determines the HRUN value for freebayes variants
 #Inputs - a freebayes generated vcf, uncompressed
+#           Note the VCF file is accessed twice and so cannot be temporary
 #       - a reference sequence
 #Output - a vcffile with added INFO fields for HRUN
 function AddHRUN2freebayes {
@@ -410,8 +424,7 @@ function AddHRUN2freebayes {
 # Read Position Bias Information will be Added at this step
 # Exclusion regions will be removed at this step
 #Inputs - a metadata file 
-#TODO: Increase Modularity by splitting into a function that iterates and one that does the work
-function Filter {
+function FilterCalls {
     metafile="$1" shift;
     local label=""
     local id=""
@@ -425,48 +438,57 @@ function Filter {
         IFS=":" read -r id vCaller <<< "$label";
         FilteredVCFMap["$label"]="$CallDir/$id-$caller-filt.vcf.gz"
         #If the call file already exists, skip
-        [ "$Force" -eq 0 ] && [ -f "${FilteredVCFMap["$caller:$id"]}" ] && continue;
-        local rawFile="${RawVCFMap["$label"]}" 
+        [ "$Force" -eq 0 ] && [ -f "${FilteredVCFMap["$label"]}" ] && continue;
         local filtFile="${FilteredVCFMap["$label"]}" 
-        local tmpFile;
-        tmpFile="$CallDir/filter_${label}_$(RandomString 8).tmp.vcf.gz"
-        #Check if an exclusion BED file was provided, if so filter out variants at those sites
-        if [ -n "$ExclusionBedFile" ]; then 
-            if ! cp "$rawFile" "$tmpFile"; then
-                >&2 echo "[ERROR] Failure to copy rawFile for filtering of $label"
-                rm -f "$tmpFile"
-                ((failCount++))
-                continue;
-            fi
-        else
-            if ! bcftools view -T "^$ExclusionBedFile" -o "$tmpFile" -O z "$rawFile"; then
-                >&2 echo "[ERROR] Failure to filter excluded regions for $label"
-                rm -f "$tmpFile"
-                ((failCount++))
-                rm -f "$tmpFile"
-                continue;
-            fi
-        fi
-        #Add RPB tags
-        if ! "$RPBCmd" "${AlignedFileMap["$id"]}" "$tmpFile"; then
-            >&2 echo "[ERROR] Failure to add RPB tag for $label"
-            ((failCount++))
-            continue;
-        fi
-        #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
-        bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
-            FilterVCFByRPB /dev/stdin "$MaxRPB" |
-            FilterVCFByMAC /dev/stdin "$MinMAC" |
+        Filter "$label" "${AlignedFileMap["$id"]}" "${RawVCFMap["$label"]}" |
             bgzip >| "$filtFile"
         if [ "$?" -ne 0 ]; then
-            >&2 echo "[ERROR] Failure to filter by RPB/MAC/HRUN for $label"
+            >&2 echo "[ERROR] Filtering or compression failure for $label"
             ((failCount++))
             rm -f "$filtFile"
             continue;
         fi
-        rm -f "$tmpFile"
     done
     return "$failCount"
+}
+
+#Perform all filtering operations for a single set of mv site calls
+#Inputs -
+#Output - prints filtered, uncompressed vcf file to stdout
+function Filter {
+    local label="$1"; shift
+    local alnFile="$1"; shift
+    local rawFile="$1"; shift
+    local tmpFile;
+    tmpFile="$CallDir/filter_${label}_$(RandomString 8).tmp.vcf.gz"
+    #Check if an exclusion BED file was provided, if so filter out variants at those sites
+    if [ -n "$ExclusionBedFile" ]; then 
+        if ! cp "$rawFile" "$tmpFile"; then
+            >&2 echo "[ERROR] Failure to copy rawFile for filtering of $label"
+            rm -f "$tmpFile" "$tmpFile.csi"
+            return "$EXIT_FAILURE"
+        fi
+    else
+        if ! bcftools view -T "^$ExclusionBedFile" -o "$tmpFile" -O z "$rawFile"; then
+            >&2 echo "[ERROR] Failure to filter excluded regions for $label"
+            rm -f "$tmpFile" "$tmpFile.csi"
+            return "$EXIT_FAILURE"
+        fi
+    fi
+    #Add RPB tags
+    if ! "$RPBCmd" "$alnFile" "$tmpFile"; then
+        >&2 echo "[ERROR] Failure to add RPB tag for $label"
+        return "$EXIT_FAILURE"
+    fi
+    #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
+    bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
+        FilterVCFByRPB /dev/stdin "$MaxRPB" |
+        FilterVCFByMAC /dev/stdin "$MinMAC"
+    if [ "$?" -ne 0 ]; then
+        >&2 echo "[ERROR] Failure in filtering by RPB/MAC/HRUN for $label"
+        return "$EXIT_FAILURE"
+    fi
+    rm -f "$tmpFile" "$tmpFile.csi"
 }
 
 #Filters out sites where the RPB is higher than some thereshold
@@ -567,6 +589,122 @@ function FilterVCFByRPB {
             print
         }
     ' "$vcf"
+}
+
+#Take the set of calls for an individual sample and output the sites upon which all callers agree
+#If any sample fails, no common calls file is generated, as incomplete data is undesirable
+#Inputs - colon-delim metaFile which includes smaple ids in first column
+#Output - None, writes to the CommonCallsFile
+function ReconcileCalls {
+    local metaFile="$1"; shift
+    #If the common calls file already exists, we can skip it
+    [ "$Force" -eq 0 ] && [ -f "$CommonCallsFile" ] && return "$EXIT_SUCCESS";
+    rm -f "$CommonCallsFile"
+    #Iterate over ids
+    local id;
+    local path1;
+    local path2;
+    while IFS=":" read -r id path1 path2; do
+        declare -a fileArr;
+        #Get the list of filtered calls for this id
+        for vCaller in "${VCallerList[@]}"; do
+            local label="$id:$vCaller"
+            fileArr+=("${FilteredVCFMap["$label"]}")
+        done
+        #Attempt reconcilliation
+        if ! Reconcile "$id" "${fileArr[@]}" >> "$CommonCallsFile"; then
+            >&2 echo "[ERROR] Failure to reconcile calls for $id"
+            rm -f "$CommonCallsFile"
+            return "$EXIT_FAILURE"
+        fi
+    done < "$metaFile"
+}
+
+#Performs the reconciliation for a single sample
+#Inputs - an id for the sample
+#       - a list of filtered vcf files
+#Output - a tab delim file with 5 columns:
+#           chrom, pos, ref, alt, callerstr, sample id
+function Reconcile {
+    local id="$1";shift
+    local tmpDir;
+    tmpDir=""
+    tmpDir="$WorkDir/reconcile_${id}_tmp_$(RandomString 8)" || return "$EXIT_FAILURE"
+    mkdir -p "$tmpDir" || return "$EXIT_FAILURE"
+    failCount=0
+    for filtVCF in "$@"; do
+        outFile="$tmpDir/$(basename "$filtVCF")"
+        bcftools norm -a -m- "$filtVCF" 2> >(grep -v '^Lines' >&2) |
+            bgzip >| "$outFile"
+        if [ "$?" -ne 0 ]; then
+            >&2 echo "[ERROR] Failure to normalize $(basename "$filtVCF")";
+            rm -f "$outFile"
+            ((failCount++))
+            continue;
+        fi
+        if ! bcftools index "$outFile"; then
+            >&2 echo "[ERROR] Failure to index normalized $(basename "$filtVCF")";
+            rm -r "$outFile.csi"
+            ((failCount++))
+            continue;
+        fi
+    done
+    #Do not continue if normalization failed
+    [ "$failCount" -gt 0 ] && return "$failCount"
+    bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
+        awk -v id="$id" '{print $0"\t"id}' || return "$EXIT_FAILURE"
+    rm -rf "$tmpDir"
+}
+
+function ReExpand {
+    local metaFile="$1"; shift
+    local refFile="$1"; shift
+    #If the common calls file already exists, we can skip it
+    [ "$Force" -eq 0 ] && [ -f "$ExpandedVCFFile" ] && return "$EXIT_SUCCESS";
+    rm -f "$ExpandedVCFFile"
+    #Get the list of default annotations to suppress output of
+    #   note, INFO/MQSBZ has bug preventing its suppression in the normal way
+    readarray -t info2suppress < <(bcftools mpileup --annotate ? 2>&1 | grep '^\* INFO' | grep -v 'MQSBZ'| cut -f2 -d' ')
+    local suppressStr
+    suppressStr=$(JoinBy "," "${info2suppress[@]/#/-}");
+    #There are several other fields to remove as well
+    declare -a deannotateList=(MQSBZ DP I16 QS)
+    deannotateList="${deannotateList/#/INFO/}"
+    deannotateList+=(FORMAT/PL)
+    local deannotateStr
+    deannotateStr=$(JoinBy "," "${deannotateList[@]}");
+    #Constructing an annotation File to add to the expanded output
+    #TODO: Handle Failures
+    local tmpFile;
+    tmpFile="$WorkDir/reexpand-annotate_$(RandomString 8).tab.gz" 
+    awk '
+        {Count[$1"\t"$2]++}
+        END{
+            n=asorti(Count,posList);
+            for(i=1;i<=n;i++){print posList[i]"\t"Count[posList[i]]
+            }
+        }
+    ' "$CommonCallsFile" | bgzip >| "$tmpFile"
+    tabix -b2 -e2 "$tmpFile"
+    columnStr="CHROM,POS,INFO/NCALL"
+    headerLine='##INFO=<ID=NCALL,Number=1,Type=Integer,Description="Number of samples in which this site was called">'
+    #Constructing an annotation vcf to mark samples where the site was called
+    #TODO:
+    #Pileup the results and clean everything up
+    bcftools mpileup --regions <(cut "$CommonCallsFile" -f1,2 | sort | uniq) --fasta-ref "$refFile" \
+        --bam-list <( printf "%s\n" "${AlignedFileMap[@]}" ) --max-depth "$MaxPileupDepth" \
+        --q "$MinMapQual" --ignore-RG --annotate "FORMAT/AD,$suppressStr" --threads "$NThread" \
+        --no-version 2> >(grep -v '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
+        bcftools annotate --no-version -x "${deannotateStr[@]}" \
+            -a "$tmpFile" -c "$columnStr" -h "$headerLine" |
+        bcftools view --trim-unseen-alleles --no-version |
+        bcftools reheader --samples <(printf "%s\n" "${!AlignedFileMap[@]}") > "$ExpandedVCFFile"
+
+    if [ "$?" -ne 0 ]; then
+        >&2 echo "[ERROR] Failure to generate expanded vcf"
+        rm -f "$ExpandedVCFFile"
+        return "$EXIT_FAILURE"
+    fi
 }
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS

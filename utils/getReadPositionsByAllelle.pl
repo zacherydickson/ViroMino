@@ -59,9 +59,12 @@ sub main {
 	push(@{$allelePos{$allele}}, $normPos);
     }
     print "Chrom\tPos\tAlleleID\tAllele\tPositions\n";
-    while(my ($id,$allele) = each %{$varObj->alleleMap}){
-	next unless (exists $allelePos{$allele});
-	my $posStr = join(",",@{$allelePos{$allele}});
+    foreach my $id (sort keys %{$varObj->alleleMap}){
+        my $allele = $varObj->alleleMap->{$id};
+        my $posStr ="";
+        if(exists $allelePos{$allele}) {
+	    $posStr = join(",",@{$allelePos{$allele}});
+        }
 	print join("\t",($varObj->chrom,$varObj->pos,$id,$allele,$posStr)),"\n";
     }
     close($fh);

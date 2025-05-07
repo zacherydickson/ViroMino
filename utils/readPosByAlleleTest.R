@@ -13,11 +13,18 @@ calcMannWhitneyP <- function(x,idx,jdx){
 }
 
 calcWilcoxSignedRankSum <- function(x,mu=MU){
+    if(!length(x)){
+        return(fromPhred(maxPhred))
+    }
     wilcox.test(x,alternative="less",mu=mu)$p.value |> suppressWarnings()
 }
 
 phredScale <- function(p){
     (-10 * log10(p)) |> floor()
+}
+
+fromPhred <- function(ph){
+    10^(ph/-10)
 }
 
 ###MAIN
@@ -42,10 +49,11 @@ posList <- split(df$Positions,df$AlleleID) |>
     lapply(round,maxPrecision) |>
     lapply(lowerHalf)
 
-#The Ref allele might have no reads supporting it if there are multiple alts, the reference can be given an RPB
-#of zero (since we can't filter the reference away
+#The Ref allele might have no reads supporting it if there are multiple alts, 
+#It might also have no reads if it a mapping artifact
+#
 if(is.null(posList$Ref)){
-    posList$Ref <- MU
+    posList$Ref <- 0
 }
 
 results <- sapply(posList,calcWilcoxSignedRankSum) |> phredScale()
