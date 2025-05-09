@@ -27,6 +27,10 @@ fromPhred <- function(ph){
     10^(ph/-10)
 }
 
+nonNA <- function(x){
+    x[!is.na(x)]
+}
+
 ###MAIN
 
 args <- commandArgs(trailingOnly = T)
@@ -42,12 +46,13 @@ df <- suppressWarnings(read.csv(file,sep="\t"))
 #We use the lower half because reads maybe reverse oriented in their mapping,
 #therefore we can't differentiate between the termini, instead we look at the distance from a terminus
 
-posList <- split(df$Positions,df$AlleleID) |>
+posList <- as.character(df$Positions) |> split(df$AlleleID) |>
     lapply(strsplit,",") |>
     lapply("[[",1) |>
     lapply(as.numeric) |> 
     lapply(round,maxPrecision) |>
-    lapply(lowerHalf)
+    lapply(lowerHalf) |>
+    lapply(nonNA)
 
 #The Ref allele might have no reads supporting it if there are multiple alts, 
 #It might also have no reads if it a mapping artifact
