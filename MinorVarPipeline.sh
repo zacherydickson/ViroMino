@@ -721,8 +721,8 @@ function Reconcile {
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
     bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-        awk -v id="$id" '{print $0"\t"id}' 
-        #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
+        CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
+        #awk -v id="$id" '{print $0"\t"id}' 
     rm -rf "$tmpDir"
 }
 
