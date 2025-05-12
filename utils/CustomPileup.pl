@@ -4,8 +4,10 @@ use strict;
 use Bio::DB::HTS;
 use Class::Struct;
 use File::Basename;
-use Zach::Util::File qw(OpenFileHandle LoadMapFile);
-use Zach::Util::Array qw(Unique);
+use FindBin;
+use lib "$FindBin::Bin/../PerlLib";
+use MVPipe::Util::File qw(OpenFileHandle LoadMapFile);
+use MVPipe::Util::Array qw(Unique);
 
 struct (PaddedVariantSet => {ref => '$', alleles => '@', len => '$'});
 struct (CallSite => {   chrom => '$', pos => '$', ref => '$',

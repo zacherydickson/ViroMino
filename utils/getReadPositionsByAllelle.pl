@@ -4,7 +4,9 @@ use strict;
 use File::Basename;
 use Class::Struct;
 use POSIX qw(ceil);
-use Zach::Util::File qw(OpenFileHandle);
+use FindBin;
+use lib "$FindBin::Bin/../PerlLib";
+use MVPipe::Util::File qw(OpenFileHandle);
 
 struct (Interval => {start => '$', end => '$'});
 struct (SuppTag => {id => '$', type => '$', value => '$'});

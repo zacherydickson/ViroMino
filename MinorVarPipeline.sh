@@ -520,7 +520,7 @@ function Filter {
     local code=0;
     tmpFile="$CallDir/filter_${label}_$(RandomString 8).tmp.vcf.gz"
     #Check if an exclusion BED file was provided, if so filter out variants at those sites
-    if [ -n "$ExclusionBedFile" ]; then 
+    if [ -z "$ExclusionBedFile" ]; then 
         if ! cp "$rawFile" "$tmpFile"; then
             Log ERROR "\tFailure to copy rawFile for filtering of $label"
             rm -f "$tmpFile" "$tmpFile.csi"
