@@ -721,30 +721,64 @@ function Reconcile {
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
     bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-        CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
+        awk -v id="$id" '{print $0"\t"id}' 
+        #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
     rm -rf "$tmpDir"
 }
 
-#Takes the output from bcftools isec (site List) and combines multiple alt alleles into a single site call
-#Inputs - an id to append to records
-#       - a site list file from bcftools isec
-#Output - a site list file with the id appended as the last column
-function CollapseCommonMultiallelicSites {
-    #TODO: This assumes that only one reference allele form will be present at any site,
-    #   but if the iste has a SNP in one sample, and an INDEL in another the ref forms would be different
-    #   Need to consolidate into one, all encompassing reference and alleles in the same form
-    local id="$1"; shift
-    local file="$1"; shift
-    sort -k6,6 -k1,1 -k2,2n "$file" |
-        awk -v id="$id" '
-            function output(){print lastChr,lastPos,ref,lastAlt,flag,id}
-            BEGIN{OFS="\t"}
-            (lastChr==$1 && lastPos==$2){lastAlt=lastAlt","$4;next}
-            (lastChr){output()}
-            {lastChr=$1;lastPos=$2;ref=$3;lastAlt=$4;flag=$5}
-            END{if(lastChr){output()}}
-        '
-}
+##Takes the output from bcftools isec (site List) and combines multiple alt alleles into a single site call
+##Inputs - an id to append to records
+##       - a site list file from bcftools isec
+##Output - a site list file with the id appended as the last column
+#function CollapseCommonMultiallelicSites {
+#    #TODO: This assumes that only one reference allele form will be present at any site,
+#    #   but if both a SNP and an INDEL both exists at one site
+#    # the ref forms would be different
+#    #   Need to consolidate into one, all encompassing reference and alleles in the same form
+#    local id="$1"; shift
+#    local file="$1"; shift
+#    sort -k6,6 -k1,1 -k2,2n "$file" |
+#        awk -v id="$id" '
+#            function output(    n,altStr,i){
+#                n=asorti(altSet,altList);
+#                altStr=altList[1];
+#                for(i=2;i<=n;i++){altStr=altStr","altList[i]}
+#                print lastChr,lastPos,commonRef,altStr,flag,id
+#            }
+#            BEGIN{OFS="\t"}
+#            (lastChr==$1 && lastPos==$2){
+#                ref=$3;
+#                refLen = length(ref);
+#                alt=$4
+#                if(refLen < cRefLen){
+#                    suffix = substr(commonRef,refLen+1); 
+#                    alt=alt suffix;
+#                }
+#                if(refLen > cRefLen){
+#                    suffix = substr(ref,cRefLen+1)
+#                    commonRef=ref;
+#                    cRefLen=refLen;
+#                    n=asorti(altSet,altList);
+#                    split("",altSet,"");
+#                    for(i=1;i<=n;i++){
+#                        altSet[altList[i] suffix] = 1
+#                    }
+#                }
+#                altSet[alt]=1
+#                next;
+#            }
+#            (lastChr){output()}
+#            {
+#                split("",altSet,"");
+#                lastChr=$1;lastPos=$2;flag=$5
+#                commonRef=$3;
+#                cRefLen=length(commonRef);
+#                altSet[$4]=1;
+#                nAlt=1;
+#            }
+#            END{if(lastChr){output()}}
+#        '
+#}
 
 function ReExpand {
     local metaFile="$1"; shift
