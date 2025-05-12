@@ -382,7 +382,7 @@ function Call_freebayes {
     tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
     #Call freebayes, then filter non-minor variant sites (mac < 1)
     freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" |
-        FilterVCFByMac /dev/stdin 1 >| "$tmpFile" || code="$?"
+        FilterVCFByMAC /dev/stdin 1 >| "$tmpFile" || code="$?"
     #Check if freeebays worked before continuing
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tfreebayes failure for $id - Check $tmpFile"
