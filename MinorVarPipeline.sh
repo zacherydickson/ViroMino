@@ -53,9 +53,9 @@ function usage {
         "\tMeta.txt\tsemicolon delim file with columns: ID, Path2Read1, Path2Read2\n" \
         "\t\tNote: will be accessed multiple times, cannot be temporary\n" \
         "\tref.fna\tFasta formatted (optionally gzipped) reference sequence\n" \
-        "\trefIndex\tPrefix for the indexed reference to use\n" \
+        "\trefIndex\tPrefix for the bowtie2 indexed reference to use\n" \
         "===OUTPUT\n" \
-        "\tCreates the Working directory with the following subfolder and files:\n" \
+        "\tCreates the Working directory with the following subfolders and files:\n" \
         "\t $(basename "$ProcDir")\tThe quality and adapter trimmed reads\n" \
         "\t $(basename "$AlignDir")\tThe bam files from aligning to the reference\n" \
         "\t $(basename "$CallDir")\tBoth raw and filtered calls for each sample with each caller\n" \
@@ -266,7 +266,10 @@ function Align {
         #Run Bowtie 2, then filter out unmapped and low qual reads and sort
         bowtie2 --threads "$NThread" --very-sensitive -x "$refIndex" -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" -U "$unpairedStr" 2>| "$AlignDir/$id.log" |
             samtools view -h -F0x4 -q "$MinMapQual" - |
-            samtools sort - >| "${AlignedFileMap["$id"]}" ||
+            samtools sort -n - |
+            samtools fixmate -m - - |
+            samtools sort - |
+            samtools markdup -r - -  >| "${AlignedFileMap["$id"]}" ||
             code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
@@ -720,65 +723,69 @@ function Reconcile {
     done
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
-    bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-        CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
-        #awk -v id="$id" '{print $0"\t"id}' 
+    if [ $(CountSites "$tmpDir/*.vcf.gz") -gt 0 ]; then
+        bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
+            CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
+            #awk -v id="$id" '{print $0"\t"id}' 
+    fi
     rm -rf "$tmpDir"
 }
 
-##Takes the output from bcftools isec (site List) and combines multiple alt alleles into a single site call
-##Inputs - an id to append to records
-##       - a site list file from bcftools isec
-##Output - a site list file with the id appended as the last column
-#function CollapseCommonMultiallelicSites {
-#    #TODO: This assumes that only one reference allele form will be present at any site,
-#    #   but if both a SNP and an INDEL both exists at one site
-#    # the ref forms would be different
-#    #   Need to consolidate into one, all encompassing reference and alleles in the same form
-#    local id="$1"; shift
-#    local file="$1"; shift
-#    sort -k6,6 -k1,1 -k2,2n "$file" |
-#        awk -v id="$id" '
-#            function output(    n,altStr,i){
-#                n=asorti(altSet,altList);
-#                altStr=altList[1];
-#                for(i=2;i<=n;i++){altStr=altStr","altList[i]}
-#                print lastChr,lastPos,commonRef,altStr,flag,id
-#            }
-#            BEGIN{OFS="\t"}
-#            (lastChr==$1 && lastPos==$2){
-#                ref=$3;
-#                refLen = length(ref);
-#                alt=$4
-#                if(refLen < cRefLen){
-#                    suffix = substr(commonRef,refLen+1); 
-#                    alt=alt suffix;
-#                }
-#                if(refLen > cRefLen){
-#                    suffix = substr(ref,cRefLen+1)
-#                    commonRef=ref;
-#                    cRefLen=refLen;
-#                    n=asorti(altSet,altList);
-#                    split("",altSet,"");
-#                    for(i=1;i<=n;i++){
-#                        altSet[altList[i] suffix] = 1
-#                    }
-#                }
-#                altSet[alt]=1
-#                next;
-#            }
-#            (lastChr){output()}
-#            {
-#                split("",altSet,"");
-#                lastChr=$1;lastPos=$2;flag=$5
-#                commonRef=$3;
-#                cRefLen=length(commonRef);
-#                altSet[$4]=1;
-#                nAlt=1;
-#            }
-#            END{if(lastChr){output()}}
-#        '
-#}
+function CountSites {
+    for f in "$@"; do 
+        bcftools view -H $f;
+    done | wc -l
+}
+
+#Takes the output from bcftools isec (site List) and combines multiple alt alleles into a single site call
+#Inputs - an id to append to records
+#       - a site list file from bcftools isec
+#Output - a site list file with the id appended as the last column
+function CollapseCommonMultiallelicSites {
+    local id="$1"; shift
+    local file="$1"; shift
+    sort -k6,6 -k1,1 -k2,2n "$file" |
+        awk -v id="$id" '
+            function output(    n,altStr,i){
+                n=asorti(altSet,altList);
+                altStr=altList[1];
+                for(i=2;i<=n;i++){altStr=altStr","altList[i]}
+                print lastChr,lastPos,commonRef,altStr,flag,id
+            }
+            BEGIN{OFS="\t"}
+            (lastChr==$1 && lastPos==$2){
+                ref=$3;
+                refLen = length(ref);
+                alt=$4
+                if(refLen < cRefLen){
+                    suffix = substr(commonRef,refLen+1); 
+                    alt=alt suffix;
+                }
+                if(refLen > cRefLen){
+                    suffix = substr(ref,cRefLen+1)
+                    commonRef=ref;
+                    cRefLen=refLen;
+                    n=asorti(altSet,altList);
+                    split("",altSet,"");
+                    for(i=1;i<=n;i++){
+                        altSet[altList[i] suffix] = 1
+                    }
+                }
+                altSet[alt]=1
+                next;
+            }
+            (lastChr){output()}
+            {
+                split("",altSet,"");
+                lastChr=$1;lastPos=$2;flag=$5
+                commonRef=$3;
+                cRefLen=length(commonRef);
+                altSet[$4]=1;
+                nAlt=1;
+            }
+            END{if(lastChr){output()}}
+        '
+}
 
 function ReExpand {
     local metaFile="$1"; shift

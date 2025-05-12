@@ -9,17 +9,26 @@ use lib "$FindBin::Bin/../PerlLib";
 use MVPipe::Util::File qw(OpenFileHandle LoadMapFile);
 use MVPipe::Util::Array qw(Unique);
 
-struct (PaddedVariantSet => {ref => '$', alleles => '@', len => '$'});
-struct (CallSite => {   chrom => '$', pos => '$', ref => '$',
-                        ref_len => '$', n_allele => '$',
-                        max_pad_len => '$', each_var_set => '@'}); 
-struct (AlignedAllele => {subject => '$', query => '$'});
+my $CommandLine = join " ", $0, @ARGV;
 
-sub LoadCommonCalls($);
+struct (PaddedVariantSet => {ref => '$', alleles => '@', len => '$'});
+#alt_idx_by_sample is a sample keyed hashref of comma sep strings of alt indexes
+#   alt numbering goes from 1 - n_allele
+struct (CallSite => {   chrom => '$', pos => '$', ref => '$', n_call => '$',
+                        ref_len => '$', n_allele => '$', indel => '$',
+                        max_pad_len => '$', each_var_set => '@', 
+                        alt_idx_str_by_smpl => '%'}); 
+#incomplete:
+#   -1: missing left part of allele; 0: complete, 1: missing right part of allele
+struct (AlignedAllele => {subject => '$', query => '$', incomplete => '$'});
+
+sub LoadCommonCalls($@);
 sub GetHTSObjects($$);
 sub CallSite2Str($);
+sub CallSite2VCFStr($);
 sub LocateAlignedSite($$$);
 sub GetAlignedAllele($$);
+sub OutputVCFHeader($@);
 #sub pileupCallback($$$$);
 
 my %CigarOpsConsumingReference = map {($_ => 1)} qw(I S H P);
@@ -31,14 +40,16 @@ if(@ARGV < 3){
 sub main {
     my ($refFile, $commonCallsFile, $bamMapFile, $maxReadLen) = @_;
     my %htsMap = GetHTSObjects($bamMapFile,$refFile);
-    my @callSites = LoadCommonCalls($commonCallsFile);
+    my @sampleNames = sort keys %htsMap;
+    my @callSites = LoadCommonCalls($commonCallsFile,@sampleNames);
     #foreach my $site (@callSites){
     #    print CallSite2Str($site),"\n";
     #}; return;
-    my @sampleNames = sort keys %htsMap;
+    OutputVCFHeader($refFile,@sampleNames);
     #Iterate over call Sites
     foreach my $callSite (sort {$a->pos <=> $b->pos} @callSites) {
         #Iterate over hts Objects in order of name
+        my $formatStr = "DP:AD:ACO:CCA";
         foreach my $smplName (@sampleNames){
             my $hts = $htsMap{$smplName};
             my $maxPaddedLen = $callSite->max_pad_len;
@@ -49,47 +60,33 @@ sub main {
             #Iterate over the alignments, extracting the alt sequences
             my @allelicDepth = (0) x $callSite->n_allele;
             my @allelicConsistency = (0) x $callSite->n_allele;
+            my $dp = 0;
             while(my $align = $iterator->next_seq){
-                #TODO: This still doesn't work because C->C is always consistent with C--- -> CXXX, but C--- wont ever be there alone
+                $dp++;
                 my $siteOff = LocateAlignedSite($callSite->pos - $align->start,
                                                 $align->cigar_array,0);
                 my $alnAlleleObj = GetAlignedAllele($callSite,$align);
-                #print "aa| ", join("\t",($alnAlleleObj->subject,$alnAlleleObj->query)),"\n";
-                #TODO: extract the cigar adjusted Ref and Alt strings
-                my $lengthOff = ($siteOff < 0) ? abs($siteOff) : 0;
-                $siteOff = 0 if($siteOff < 0);
-                my ($refseq, $matches, $queryseq) = $align->padded_alignment;
+                #Iterate over variant sets with the same reference form 
                 my $adIdx = undef;
                 my $alleleIdx = 0;
                 foreach my $varSetObj (@{$callSite->each_var_set}){
-                    #my $len = $varSetObj->len - $lengthOff;
-                    ##If the read is entirely after the alleles it can't be used
-                    #if($len < 1){
-                    #    $alleleIdx += scalar @{$varSetObj->alleles};
-                    #    next;
-                    #}
-                    #my $refAln = substr($refseq,$siteOff,$len);
-                    #print "$refAln $siteOff,$len, (@{[VarSet2Str($varSetObj)]})\n";
-                    #my $queryAln = substr($queryseq,$siteOff,$len);
                     my $refAln = $alnAlleleObj->subject;
                     my $queryAln = $alnAlleleObj->query;
+                    #Iterate over alleles
                     foreach my $allele (@{$varSetObj->alleles}){
                         my $alleleQ = $allele;
                         my $alleleRef = $varSetObj->ref;
-                        my $alleleLen = length($alleleQ);
-                        my $alnLen = length($refAln);
-                        if($alleleLen > $alnLen){
-                            my $diff = $alleleLen - $alnLen;
-                            if($lengthOff) { #allele starts before read
+                        my $diff = length($alleleQ) - length($refAln);
+                        if($diff > 0){
+                            next if(! $alnAlleleObj->incomplete);
+                            if($alnAlleleObj->incomplete < 0){
                                 $alleleRef = substr($alleleRef,$diff);
                                 $alleleQ = substr($allele,$diff);
-                            } else { #allele ends after read, leave off diff
+                            } else {
                                 $alleleRef = substr($alleleRef,0,-$diff);
                                 $alleleQ = substr($allele,0,-$diff);
                             }
-                            
                         }
-                        print "$alleleRef vs $refAln and $alleleQ vs $queryAln\n";
                         #Check if the read is consistent with the allele
                         if($alleleRef eq $refAln and $alleleQ eq $queryAln){
                             #Set the Ad to this allele, if multiple alleles
@@ -103,38 +100,17 @@ sub main {
                 if(defined $adIdx and $adIdx >= 0){
                     $allelicDepth[$adIdx]++;
                 }
-                print "$smplName\n";
-                print "CS) ", CallSite2Str($callSite),"\n";
-                print $align->query->name," @ $siteOff, $lengthOff\n";
-                print join("\n",($align->padded_alignment)),"\n";
-                print "@allelicDepth\n";
-                print "@allelicConsistency\n";
-
-                #TODO: Figure out how best to parse the alignments to get the
-                #   expanded data we want
-                #Idea: Iterate over all uniq alleles called at the site
-                #   Count the number of reads which are CONSISTENT with that allele
-                #   For each allele, Note the number of reads which are 
-                #       consistent only with it
-                #   The former could be the support for the read
-                #   The latter would be the allelic depth
-                #   At the end any allele which has no allelic depth can be
-                #       dropped (except the reference)
-                #TODO: Probably should try to combine things together at this
-                #   point into haplotypes where possible
-                #   Perhaps a first pass to identify reads which span multiple 
-                #   sites, those can be combined into a single call site entry and
-                #       treated the same as above
-                #TODO: Work would then need to be done to mark the samples
-                #   which had actual alleles called
-
-                #my $alnStart = $align->start;
-
-                #if($smplName eq "JC3" && $callSite->pos == 2930) {
-                #    print join(" ",$align->start,$align->end,$align->strand),"\n";
-                #}
             }
+            my $altIdxStr = $callSite->alt_idx_str_by_smpl($smplName);
+            $formatStr .= "\t".join(":",(   $dp,
+                                            join(",",@allelicDepth),
+                                            join(",",@allelicConsistency),
+                                            $altIdxStr));
         }
+        my $infoStr = "NCALL=".$callSite->n_call;
+        $infoStr .= ";INDEL" if($callSite->indel);
+        print  join("\t",(  CallSite2VCFStr($callSite),('.') x 2,
+                            $infoStr,$formatStr)),"\n";
     }
 } main (@ARGV);
 
@@ -145,20 +121,31 @@ sub main {
 #Inputs - A path to a common Calls File:
 #           tab delim, with header of CHROM POS, etc
 #Output - An array of uniq call sites in the calls file
-sub LoadCommonCalls($){
-    my $file = shift;
+sub LoadCommonCalls($@){
+    my ($file,@sampleNames) = @_;
     my $fh = OpenFileHandle($file,"CommonCalls");
     my %uniqSites;
-    #label keyed hash of ref allele keyed hash ref of alt alleles set ref
+    #label keyed hash of ref allele keyed hash ref of alt alleles keyed array if samples
     my %refAltSetDict;
+    #label keyed hash of sample name keyed hash of alleles setRef
+    #my %allelesBySiteSample;
     my $header = <$fh>;
     while(my $line = <$fh>){
         chomp($line);
-        my ($chrom,$pos,$ref,$alt,@other) = split(/\t/,$line);
+        my ($chrom,$pos,$ref,$alt,$vCaller,$sample) = split(/\t/,$line);
         my $label = "$chrom.$pos";
+        #unless(exists $allelesBySiteSample{$label}) {
+        #    $allelesBySiteSample{$label} = {};
+        #}
+        #unless(exists $allelesBySiteSample{$label}->{$sample}){
+        #    $allelesBySiteSample{$label}->{$sample} = {};
+        #}
+        #$allelesBySiteSample{$label}->{$sample}->{$alt} = 1;
+        my $bIndel = (length($ref) != length($alt)) ? 1 : 0;
         unless(exists $uniqSites{$label}){
             $uniqSites{$label} = CallSite->new( chrom => $chrom, pos => $pos,
-                                                ref => undef, each_var_set => []);
+                                                ref => undef, each_var_set => [],
+                                                indel => $bIndel, n_call => 0);
         }
         unless(exists $refAltSetDict{$label}){
             $refAltSetDict{$label} = {};
@@ -166,7 +153,8 @@ sub LoadCommonCalls($){
         unless(exists $refAltSetDict{$label}->{$ref}){
             $refAltSetDict{$label}->{$ref} = {}
         }
-        $refAltSetDict{$label}->{$ref}->{$alt} = 1
+        $refAltSetDict{$label}->{$ref}->{$alt} = [] unless(exists $refAltSetDict{$label}->{$ref}->{$alt});
+        push(@{$refAltSetDict{$label}->{$ref}->{$alt}},$sample);
     }
     #Ensure that all reference alleles are of the same form across samples
     #   padding is added at this point which can cause multiple ref forms
@@ -181,7 +169,10 @@ sub LoadCommonCalls($){
                 PaddedVariantSet->new(  ref => $commonRef,
                                         len => $commonRefLen,
                                         alleles => [$commonRef]));
-        my %alleleSet;
+        #Used to Count the number of unique samples in which this site was called
+        # sample keyed hash of padded allele setRef
+        my %sampleSet;
+        #Used to map unique alt alleles to samples they in which they were called
         #paddedRef Keyed hash of paddedAlt setRef
         my %padSetDict;
         while (my ($ref,$rAltSet) = each %{$rRefAltSet}){
@@ -195,7 +186,7 @@ sub LoadCommonCalls($){
             #Pad each ref-alt pair prior to adding the suffix
             #Then record the unique pad ref forms observed and their associated
             # padded alts   
-            foreach my $alt (keys %{$rAltSet}){
+            while( my ($alt,$rSampleList) = each %{$rAltSet}){
                 my $lenDiff = length($alt) - $refLen;
                 my $padRef = $ref;
                 $padRef .= '-' x abs($lenDiff)  if($lenDiff > 0);
@@ -205,20 +196,48 @@ sub LoadCommonCalls($){
                 $padAlt .= $suffix;
                 $padSetDict{$padRef} = {} unless(exists $padSetDict{$padRef});
                 $padSetDict{$padRef}->{$padAlt} = 1;
+                #For every sample in which this alt appeared,
+                # add this padded alt to the list of padded Alts for this sample
+                foreach my $sample (@{$rSampleList}){
+                    $sampleSet{$sample} = {} unless(exists $sampleSet{$sample});
+                    $sampleSet{$sample}->{$padAlt} = 1;
+                }
             }
         }
+        $callSite->n_call(scalar keys %sampleSet);
         my $nAllele = 1;
+        my %alleleIdxBySample = map {($_ => [])} @sampleNames;
+        my $altIdx = 1;
         while(my ($padRef,$rPadAltSet) = each %padSetDict){
             #The ref allele will always be included
             delete $rPadAltSet->{$padRef} if(exists $rPadAltSet->{$padRef});
-            push(   @{$callSite->each_var_set},
-                    PaddedVariantSet->new(ref => $padRef, len => length($padRef),
-                                          alleles => [sort keys %{$rPadAltSet}]));
+            my $varSet = PaddedVariantSet->new( ref => $padRef,
+                            len => length($padRef),
+                            alleles => [sort keys %{$rPadAltSet}]);
+            push(@{$callSite->each_var_set}, $varSet);
+            foreach my $padAlt (@{$varSet->alleles}){
+                while (my ($sample, $rPadSet) = each %sampleSet){
+                    if(exists $rPadSet->{$padAlt}) {
+                        push(@{$alleleIdxBySample{$sample}},$altIdx);
+                    }
+                }
+            } continue {$altIdx++}
             $nAllele += scalar(keys %{$rPadAltSet});
         }
-        my ($maxObj) = sort {$b->len <=> $a->len} @{$callSite->each_var_set};
+        my @varSetList = @{$callSite->each_var_set};
+        my ($maxObj) = sort {$b->len <=> $a->len} @varSetList;
         $callSite->n_allele($nAllele);
         $callSite->max_pad_len($maxObj->len);
+        #Construct altIdx Strings
+        my %altIdxStrDict = map {($_ => '.')} @sampleNames;
+        foreach my $smpl (@sampleNames){
+            my $rAltIdxList = $alleleIdxBySample{$smpl};
+            if(scalar @{$rAltIdxList}) {
+                $altIdxStrDict{$smpl} = join(',',
+                    sort {$a <=> $b} @{$rAltIdxList});
+            }
+        }
+        $callSite->alt_idx_str_by_smpl(\%altIdxStrDict);
     }
     return values %uniqSites;
 }
@@ -247,6 +266,24 @@ sub CallSite2Str($){
     my $varSetStr = join(";",map {VarSet2Str($_)} @{$obj->each_var_set});
     return join("\t",($obj->chrom,$obj->pos,$obj->ref,$obj->n_allele,
                       $obj->max_pad_len,$varSetStr));
+}
+
+sub CallSite2VCFStr($){
+    my $obj = shift;
+    my %alleleSet;
+    my @varSetList = @{$obj->each_var_set};
+    #Strip of the first var set (reference)
+    shift @varSetList;
+    my @altAlleles;
+    foreach my $varSet (@varSetList){
+        my @alleles = @{$varSet->alleles};
+        for(my $i = 0; $i < @alleles; $i++){
+            $alleles[$i] =~ tr/-//d;
+        }
+        push(@altAlleles,@alleles);
+    }
+    my $altStr = join(",",@altAlleles);
+    return join("\t",(  $obj->chrom,$obj->pos,$obj->ref,$altStr));
 }
 
 #Given a cigar array and an offset within an alignment, determine the position within an alignment where a variant position is
@@ -282,21 +319,51 @@ sub GetAlignedAllele($$){
     my $siteOff = LocateAlignedSite($callSite->pos - $align->start,
                                     $align->cigar_array,0);
     my $lengthOff = 0;
+    my $incomplete = 0;
     if($siteOff < 0) {
         $lengthOff = abs($siteOff);
         $siteOff = 0;
+        $incomplete = -1;
     }
     my $callEnd = $callSite->pos + $callSite->ref_len - 1;
     #Find the first position in the alignment after the end of the call site
     # then return the position just before that, which allows for gaps
     my $endOff = LocateAlignedSite($callEnd - $align->start + 1,
                                     $align->cigar_array,1);
-    print "I) $alnStart; @{[$callSite->pos]} -> $siteOff  $callEnd -> $endOff\n";
     my ($subject, $matches, $query) = $align->padded_alignment;
+    my $alnLen = length($subject);
     #take the read suffix from the start of the allele
-    $query = substr($query,$siteOff,$endOff-$siteOff-$lengthOff);
-    $subject = substr($subject,$siteOff,$endOff-$siteOff-$lengthOff);
-    return AlignedAllele->new(subject => $subject, query => $query);
+    my $alleleLen = $endOff-$siteOff-$lengthOff;
+    $query = substr($query,$siteOff,$alleleLen);
+    $subject = substr($subject,$siteOff,$alleleLen);
+
+    if(!$incomplete and (   length($query) < $alleleLen or
+                            $endOff >= $alnLen))
+    {
+        $incomplete = 1;
+    }
+    return AlignedAllele->new(  subject => $subject, query => $query,
+                                incomplete => $incomplete);
+}
+
+
+sub OutputVCFHeader($@) {
+    my ($ref,@sampleNames) = @_;
+    print   "##fileformat=VCFv4.2\n".
+            "##source=$CommandLine\n".
+            "##reference=file://@{[basename($ref)]}\n";
+    my %contigLenMap = LoadMapFile("$ref.fai","faidx","\t");
+    foreach my $contig (sort keys %contigLenMap){
+        print "##contig=<ID=$contig,length=$contigLenMap{$contig}>\n";
+    }
+    print   "##INFO=<ID=INDEL=1,Number=0,Type=Flag,Description=\"Indicates variant isa an INDEL\">\n".
+            "##INFO=<ID=NCALL=1,Number=1,Type=Integer,Description=\"Number of samples in which this site was called\">\n".
+            "##FORMAT=<ID=DP,Number=1,Type=Integer,\"Number of reads overlapping a position\">\n".
+            "##FORMAT=<ID=AD,Number=R,Type=Integer,\"Allelic depths\">\n".
+            "##FORMAT=<ID=ACO,Number=R,Type=Integer,\"Number of reads consistent with an allele\">\n".
+            "##FORMAT=<ID=CCA,Number=1,Type=String,Description=\"The confidently called alt allele(s), if any, in this sample\">\n".
+            join("\t",(qw(CHROM POS ID REF ALT QUAL FILTER INFO FORMAT),@sampleNames))."\n"
+            ;
 }
 
 ##
