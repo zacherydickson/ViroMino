@@ -359,7 +359,7 @@ function Call_lofreq {
 }
 
 #Uses the faidx index for the reference genome to add contig entries to the lofreq results
-function AddContig2lofreq {
+function AddContigs2lofreq {
     refFile="$1"; shift
     inVCF="$1"; shift
     awk -F '\\t' '
