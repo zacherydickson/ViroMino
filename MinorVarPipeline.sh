@@ -173,7 +173,7 @@ function main {
     #Get the set of sites which are common to all callers - creates CommonCalls
     ReconcileCalls "$metaFile" || exit "$EXIT_FAILURE"
     #Re-expand sites which were retained in at least one sample - creates ExpandedVCF
-    #ReExpand "$metaFile" "$refFile" || exit "$EXIT_FAILURE"
+    ReExpand "$metaFile" "$refFile" || exit "$EXIT_FAILURE"
     ##Attempt Haplotype Calling - creates HaplotypedVCF
     ##TODO:
     [ "$Verbose" -eq 1 ] && Log INFO "Done"
@@ -726,8 +726,8 @@ function Reconcile {
     [ "$failCount" -gt 0 ] && return "$failCount"
     if [ "$(CountSites "$tmpDir/*.vcf.gz")" -gt 0 ]; then
         bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-            CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
-            #awk -v id="$id" '{print $0"\t"id}' 
+            awk -v id="$id" '{print $0"\t"id}' 
+            #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
     fi
     rm -rf "$tmpDir"
 }

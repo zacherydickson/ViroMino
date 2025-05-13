@@ -40,9 +40,9 @@ sub main {
     my %htsMap = GetHTSObjects($bamMapFile,$refFile);
     my @sampleNames = sort keys %htsMap;
     my @callSites = LoadCommonCalls($commonCallsFile,@sampleNames);
-    foreach my $site (@callSites){
-        print CallSite2Str($site),"\n";
-    }; return;
+    #foreach my $site (@callSites){
+    #    print CallSite2Str($site),"\n";
+    #}; return;
     OutputVCFHeader($refFile,@sampleNames);
     #Iterate over call Sites
     foreach my $callSite (sort {$a->pos <=> $b->pos} @callSites) {
@@ -126,20 +126,11 @@ sub LoadCommonCalls($@){
     my %uniqSites;
     #label keyed hash of ref allele keyed hash ref of alt alleles keyed array if samples
     my %refAltSetDict;
-    #label keyed hash of sample name keyed hash of alleles setRef
-    #my %allelesBySiteSample;
     my $header = <$fh>;
     while(my $line = <$fh>){
         chomp($line);
         my ($chrom,$pos,$ref,$alt,$vCaller,$sample) = split(/\t/,$line);
         my $label = "$chrom.$pos";
-        #unless(exists $allelesBySiteSample{$label}) {
-        #    $allelesBySiteSample{$label} = {};
-        #}
-        #unless(exists $allelesBySiteSample{$label}->{$sample}){
-        #    $allelesBySiteSample{$label}->{$sample} = {};
-        #}
-        #$allelesBySiteSample{$label}->{$sample}->{$alt} = 1;
         my $bIndel = (length($ref) != length($alt)) ? 1 : 0;
         unless(exists $uniqSites{$label}){
             $uniqSites{$label} = CallSite->new( chrom => $chrom, pos => $pos,
