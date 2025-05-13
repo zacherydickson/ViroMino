@@ -701,7 +701,7 @@ function ReconcileCalls {
             continue;
         fi
     done < "$metaFile"
-    if [ "$failCount" > 0 ]; then
+    if [ "$failCount" -gt 0 ]; then
         Log ERROR "Could not generate Common Calls"
         rm -f "$CommonCallsFile"
         return "$failCount"
