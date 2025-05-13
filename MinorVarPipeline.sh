@@ -312,7 +312,7 @@ function Call {
     local failCount=0;
     #TODO: This could potentially be parallelized
     for id in "${IDList[@]}"; do
-        $label="$caller:$id"
+        local label="$caller:$id"
         RawVCFMap[$label]="$CallDir/$id-$caller-raw.vcf.gz"
         #If the call file already exists, skip
         if [ "$Force" -eq 0 ] && [ -f "${RawVCFMap["$label"]}" ]; then
