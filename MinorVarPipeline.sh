@@ -151,6 +151,8 @@ function main {
     local refFile="$1"; shift
     local refIndex="$1"; shift
     CheckFile "$metaFile" || exit "$EXIT_FAILURE"
+    #Index the input reference
+    samtools faidx "$refFile"
     readarray -t IDList < <(cut -f1 -d: "$metaFile");
     #Construct the working dir and vars for various paths to use
     mkdir -p "$WorkDir"
@@ -352,7 +354,19 @@ function Call_lofreq {
     fi
     lofreq indelqual --dindel --ref "$refFile" "$alnFile" |
         lofreq call --ref "$refFile" --call-indels - |
+        AddContigs2lofreq "$refFile" /dev/stdin |
         AddFormat2lofreq /dev/stdin
+}
+
+#Uses the faidx index for the reference genome to add contig entries to the lofreq results
+function AddContig2lofreq {
+    refFile="$1"; shift
+    inVCF="$1"; shift
+    awk -F '\\t' '
+        (ARGIND == 1){ contigStr[++nContig] = "##contig=<ID="$1",length="$2">";next}   
+        (FNR == 1){ print; for(i=1;i<=nContig;i++){print contigStr[i]};next}
+        1
+    ' "$refFile.fai" "$inVCF"
 }
 
 #Adds GT and AD format fields to an 'unknown' sample in lofreq generated output
@@ -683,14 +697,16 @@ function ReconcileCalls {
         #Attempt reconcilliation
         if ! Reconcile "$id" "${fileArr[@]}" >> "$CommonCallsFile"; then
             Log ERROR "\tFailure to reconcile calls for $id"
-            rm -f "$CommonCallsFile"
             ((failCount++))
             continue;
         fi
     done < "$metaFile"
+    if [ "$failCount" > 0 ]; then
+        Log ERROR "Could not generate Common Calls"
+        rm -f "$CommonCallsFile"
+        return "$failCount"
+    fi
     [ "$Verbose" -eq 1 ] && Log INFO "Completed Reconciliation"
-    return "$failCount";
-
 }
 
 #Performs the reconciliation for a single sample
@@ -724,7 +740,7 @@ function Reconcile {
     done
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
-    if [ "$(CountSites "$tmpDir/*.vcf.gz")" -gt 0 ]; then
+    if [ "$(CountSites "$tmpDir"/*.vcf.gz)" -gt 0 ]; then
         bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
             awk -v id="$id" '{print $0"\t"id}' 
             #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
