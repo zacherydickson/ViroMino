@@ -11,6 +11,7 @@ source "$ExecDir/BashFunctionLibrary/functions/IsNumeric.sh"
 source "$ExecDir/BashFunctionLibrary/functions/JoinBy.sh"
 source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
 RPBCmd="$ExecDir/utils/AddRPBInfoTag.sh"
+PileupCmd="$ExecDir/utils/CustomPileup.pl"
 
 ##Default Values
 
@@ -40,7 +41,7 @@ MaxHRUN=5
 MinMAC=6
 MaxRPB=13
 MinNCallers="${#VCallerList[@]}"
-MaxPileupDepth=1000
+#MaxPileupDepth=1000
 Verbose=0
 
 ##HANDLE INPUTS
@@ -723,17 +724,17 @@ function Reconcile {
     done
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
-    if [ $(CountSites "$tmpDir/*.vcf.gz") -gt 0 ]; then
+    if [ "$(CountSites "$tmpDir/*.vcf.gz")" -gt 0 ]; then
         bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-            CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
-            #awk -v id="$id" '{print $0"\t"id}' 
+            awk -v id="$id" '{print $0"\t"id}' 
+            #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
     fi
     rm -rf "$tmpDir"
 }
 
 function CountSites {
     for f in "$@"; do 
-        bcftools view -H $f;
+        bcftools view -H "$f";
     done | wc -l
 }
 
@@ -797,19 +798,23 @@ function ReExpand {
         return "$EXIT_SUCCESS";
     fi
     [ "$Verbose" -eq 1 ] && Log INFO "ReExpanding MV calls ..."
+
     rm -f "$ExpandedVCFFile"
     #Pileup the results and clean everything up
-    bcftools mpileup --regions-file <(cut "$CommonCallsFile" -f1,2 | tail -n+2 | sort | uniq) --fasta-ref "$refFile" \
-        --bam-list <( printf "%s\n" "${AlignedFileMap[@]}" ) --max-depth "$MaxPileupDepth" \
-        -q "$MinMapQual" --ignore-RG --annotate "FORMAT/AD" --threads "$NThread" \
-        --no-version 2> >(grep -Pv '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
-        CleanAnnotations /dev/stdin | 
-        AddNCallAnnote "$WorkDir" "$CommonCallsFile" /dev/stdin |
-        bcftools view --trim-unseen-allele --no-version - |
-        bcftools reheader --samples <(printf "%s\n" "${!AlignedFileMap[@]}") - |
-        AddCCAnnote "$CommonCallsFile" /dev/stdin |
+    "$PileupCmd" "$refFile" "$CommonCallsFile" <(ConstructBamMapFile) |
         awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
         bgzip > "$ExpandedVCFFile" || code="$?"
+    #bcftools mpileup --regions-file <(cut "$CommonCallsFile" -f1,2 | tail -n+2 | sort | uniq) --fasta-ref "$refFile" \
+    #    --bam-list <( printf "%s\n" "${AlignedFileMap[@]}" ) --max-depth "$MaxPileupDepth" \
+    #    -q "$MinMapQual" --ignore-RG --annotate "FORMAT/AD" --threads "$NThread" \
+    #    --no-version 2> >(grep -Pv '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
+    #    CleanAnnotations /dev/stdin | 
+    #    AddNCallAnnote "$WorkDir" "$CommonCallsFile" /dev/stdin |
+    #    bcftools view --trim-unseen-allele --no-version - |
+    #    bcftools reheader --samples <(printf "%s\n" "${!AlignedFileMap[@]}") - |
+    #    AddCCAnnote "$CommonCallsFile" /dev/stdin |
+    #    awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
+    #    bgzip > "$ExpandedVCFFile" || code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "Failure to generate expanded vcf"
         rm -f "$ExpandedVCFFile"
@@ -818,107 +823,113 @@ function ReExpand {
     [ "$Verbose" -eq 1 ] && Log INFO "MV call ReExpansion complete"
 }
 
-#Remove unwanted annotations from the VCF file
-#Inputs - a vcf file to clean
-#Output - Prints the modified VCF to stderr
-function CleanAnnotations {
-    inVcf="$1";shift
-    #Get the list of default annotations to remove
-    declare -a deannotateList;
-    local deannotateStr
-    #Get the default list of annotations
-    readarray -t deannotateList < \
-        <(bcftools mpileup --annotate "?" 2>&1 | grep '^\* INFO' | cut -f2 -d' ')
-    #Remove the auxillary calling tags and the genotype likelihoods
-    deannotateList+=(INFO/DP INFO/I16 INFO/QS FORMAT/PL)
-    deannotateStr=$(JoinBy "," "${deannotateList[@]}");
-    bcftools annotate --no-version -x "$deannotateStr" "$inVcf" || return "$EXIT_FAILURE"
+function ConstructBamMapFile {
+    for id in "${!AlignedFileMap[@]}"; do
+        echo -e "$id\t${AlignedFileMap[$id]}";
+    done
 }
 
-#Given a file containing called MV sites and a vcf file, adds INFO/NCALLS
-#   Which specifies the number of samples where the site was confidently called
-#Inputs - a directory in which to place temporary files
-#       - A common calls text file
-#       - a VCF file, can be a temporary file
-#Output - Prints the modified VCF to stdout
-function AddNCallAnnote {
-    local workDir=$1; shift
-    local commonCalls=$1; shift
-    local in="$1"; shift
-    local code=0;
-    local tmpFile;
-    tmpFile="$workDir/reexpand-ncall_$(RandomString 8).tmp.tab.gz" 
-    #Build annotation file
-    awk '
-        (FNR==1){next}
-        {Count[$1"\t"$2]++}
-        END{
-            n=asorti(Count,posList);
-            for(i=1;i<=n;i++){print posList[i]"\t"Count[posList[i]]
-            }
-        }
-    ' "$commonCalls" | bgzip > "$tmpFile" || code="$?"
-    #Check that construction worked and attempt indexing
-    if [ "$code" -ne 0 ] || ! tabix -b2 -e2 "$tmpFile"; then
-        Log ERROR "Failure to generate and index NCALL annotation"
-        rm -f "$tmpFile" "$tmpFile.tbi"
-        return "$EXIT_FAILURE"
-    fi
-    #Other annotation vars
-    columnStr="CHROM,POS,INFO/NCALL"
-    headerLine='##INFO=<ID=NCALL,Number=1,Type=Integer,Description="Number of samples in which this site was called">'
-    #Attempt Annotation
-    if ! bcftools annotate --no-version -a "$tmpFile" -c "$columnStr" -h <( echo "$headerLine") "$in"; then 
-        >&2  echo "[ERROR] Failure to add INFO/NCALL Annotation - Check $tmpFile"
-        return "$EXIT_FAILURE"
-    fi
-    #Cleanup
-    rm -f "$tmpFile" "$tmpFile.tbi"
-}
-
-#Using the commonCalls File generates CC annotations to add to the input vcf
-#   Annotations are added with awk, so the input must be uncompressed
-#Inputs - A common calls text file
-#       - a VCF file, can be a temporary file
-#Output - Prints the modified VCF to stdout
-function AddCCAnnote {
-    local commonCalls=$1; shift
-    local in="$1"; shift
-    local code=0;
-    awk -F '\\t' '
-        BEGIN {OFS="\t"}
-        (ARGIND == 1){
-            if(FNR > 1){
-                CCSite[$1,$2,$6]=$4;
-            }
-            next
-        }
-        /^##/{print; next}
-        /^#CHROM/{
-            Desc = "The Confidently Called Alt Allele(s), if any, in this sample"
-            print "##FORMAT=<ID=CCA,Number=1,Type=String,Description=\""Desc"\">"
-            for(i=9;i<=NF;i++){
-                SampleName[i]=$i;
-            }
-            print;next;
-        }
-        {
-            emptyFormat=($9==".")
-            CCSite[$1,$2,"FORMAT"]="CCA"
-            for(i=9;i<=NF;i++){
-                CC="."
-                smpl=SampleName[i]
-                if(CCSite[$1,$2,smpl]) { CC=CCSite[$1,$2,smpl] }
-                if(emptyFormat){ $i=CC } else { $i=$i":"CC }
-            }
-            print
-        }
-    ' "$commonCalls" "$in" || code="$?"
-    if [ "$code" -ne 0 ]; then
-        Log ERROR "Failure to add CC Annotation to VCF file"
-        return "$EXIT_FAILURE"
-    fi
-}
+##Remove unwanted annotations from the VCF file
+##Inputs - a vcf file to clean
+##Output - Prints the modified VCF to stderr
+#function CleanAnnotations {
+#    inVcf="$1";shift
+#    #Get the list of default annotations to remove
+#    declare -a deannotateList;
+#    local deannotateStr
+#    #Get the default list of annotations
+#    readarray -t deannotateList < \
+#        <(bcftools mpileup --annotate "?" 2>&1 | grep '^\* INFO' | cut -f2 -d' ')
+#    #Remove the auxillary calling tags and the genotype likelihoods
+#    deannotateList+=(INFO/DP INFO/I16 INFO/QS FORMAT/PL)
+#    deannotateStr=$(JoinBy "," "${deannotateList[@]}");
+#    bcftools annotate --no-version -x "$deannotateStr" "$inVcf" || return "$EXIT_FAILURE"
+#}
+#
+##Given a file containing called MV sites and a vcf file, adds INFO/NCALLS
+##   Which specifies the number of samples where the site was confidently called
+##Inputs - a directory in which to place temporary files
+##       - A common calls text file
+##       - a VCF file, can be a temporary file
+##Output - Prints the modified VCF to stdout
+#function AddNCallAnnote {
+#    local workDir=$1; shift
+#    local commonCalls=$1; shift
+#    local in="$1"; shift
+#    local code=0;
+#    local tmpFile;
+#    tmpFile="$workDir/reexpand-ncall_$(RandomString 8).tmp.tab.gz" 
+#    #Build annotation file
+#    awk '
+#        (FNR==1){next}
+#        {Count[$1"\t"$2]++}
+#        END{
+#            n=asorti(Count,posList);
+#            for(i=1;i<=n;i++){print posList[i]"\t"Count[posList[i]]
+#            }
+#        }
+#    ' "$commonCalls" | bgzip > "$tmpFile" || code="$?"
+#    #Check that construction worked and attempt indexing
+#    if [ "$code" -ne 0 ] || ! tabix -b2 -e2 "$tmpFile"; then
+#        Log ERROR "Failure to generate and index NCALL annotation"
+#        rm -f "$tmpFile" "$tmpFile.tbi"
+#        return "$EXIT_FAILURE"
+#    fi
+#    #Other annotation vars
+#    columnStr="CHROM,POS,INFO/NCALL"
+#    headerLine='##INFO=<ID=NCALL,Number=1,Type=Integer,Description="Number of samples in which this site was called">'
+#    #Attempt Annotation
+#    if ! bcftools annotate --no-version -a "$tmpFile" -c "$columnStr" -h <( echo "$headerLine") "$in"; then 
+#        >&2  echo "[ERROR] Failure to add INFO/NCALL Annotation - Check $tmpFile"
+#        return "$EXIT_FAILURE"
+#    fi
+#    #Cleanup
+#    rm -f "$tmpFile" "$tmpFile.tbi"
+#}
+#
+##Using the commonCalls File generates CC annotations to add to the input vcf
+##   Annotations are added with awk, so the input must be uncompressed
+##Inputs - A common calls text file
+##       - a VCF file, can be a temporary file
+##Output - Prints the modified VCF to stdout
+#function AddCCAnnote {
+#    local commonCalls=$1; shift
+#    local in="$1"; shift
+#    local code=0;
+#    awk -F '\\t' '
+#        BEGIN {OFS="\t"}
+#        (ARGIND == 1){
+#            if(FNR > 1){
+#                CCSite[$1,$2,$6]=$4;
+#            }
+#            next
+#        }
+#        /^##/{print; next}
+#        /^#CHROM/{
+#            Desc = "The Confidently Called Alt Allele(s), if any, in this sample"
+#            print "##FORMAT=<ID=CCA,Number=1,Type=String,Description=\""Desc"\">"
+#            for(i=9;i<=NF;i++){
+#                SampleName[i]=$i;
+#            }
+#            print;next;
+#        }
+#        {
+#            emptyFormat=($9==".")
+#            CCSite[$1,$2,"FORMAT"]="CCA"
+#            for(i=9;i<=NF;i++){
+#                CC="."
+#                smpl=SampleName[i]
+#                if(CCSite[$1,$2,smpl]) { CC=CCSite[$1,$2,smpl] }
+#                if(emptyFormat){ $i=CC } else { $i=$i":"CC }
+#            }
+#            print
+#        }
+#    ' "$commonCalls" "$in" || code="$?"
+#    if [ "$code" -ne 0 ]; then
+#        Log ERROR "Failure to add CC Annotation to VCF file"
+#        return "$EXIT_FAILURE"
+#    fi
+#}
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS
 if [ "${BASH_SOURCE[0]}" == "${0}" ]; then 

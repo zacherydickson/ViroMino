@@ -9,8 +9,6 @@ use lib "$FindBin::Bin/../PerlLib";
 use MVPipe::Util::File qw(OpenFileHandle LoadMapFile);
 use MVPipe::Util::Array qw(Unique);
 
-my $CommandLine = join " ", $0, @ARGV;
-
 struct (PaddedVariantSet => {ref => '$', alleles => '@', len => '$'});
 #alt_idx_by_sample is a sample keyed hashref of comma sep strings of alt indexes
 #   alt numbering goes from 1 - n_allele
@@ -42,9 +40,9 @@ sub main {
     my %htsMap = GetHTSObjects($bamMapFile,$refFile);
     my @sampleNames = sort keys %htsMap;
     my @callSites = LoadCommonCalls($commonCallsFile,@sampleNames);
-    #foreach my $site (@callSites){
-    #    print CallSite2Str($site),"\n";
-    #}; return;
+    foreach my $site (@callSites){
+        print CallSite2Str($site),"\n";
+    }; return;
     OutputVCFHeader($refFile,@sampleNames);
     #Iterate over call Sites
     foreach my $callSite (sort {$a->pos <=> $b->pos} @callSites) {
@@ -122,6 +120,7 @@ sub main {
 #           tab delim, with header of CHROM POS, etc
 #Output - An array of uniq call sites in the calls file
 sub LoadCommonCalls($@){
+    #TODO: Mixed alleles aren't loading properly
     my ($file,@sampleNames) = @_;
     my $fh = OpenFileHandle($file,"CommonCalls");
     my %uniqSites;
@@ -350,7 +349,6 @@ sub GetAlignedAllele($$){
 sub OutputVCFHeader($@) {
     my ($ref,@sampleNames) = @_;
     print   "##fileformat=VCFv4.2\n".
-            "##source=$CommandLine\n".
             "##reference=file://@{[basename($ref)]}\n";
     my %contigLenMap = LoadMapFile("$ref.fai","faidx","\t");
     foreach my $contig (sort keys %contigLenMap){
