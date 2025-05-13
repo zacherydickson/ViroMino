@@ -173,7 +173,7 @@ function main {
     #Get the set of sites which are common to all callers - creates CommonCalls
     ReconcileCalls "$metaFile" || exit "$EXIT_FAILURE"
     #Re-expand sites which were retained in at least one sample - creates ExpandedVCF
-    ReExpand "$metaFile" "$refFile" || exit "$EXIT_FAILURE"
+    #ReExpand "$metaFile" "$refFile" || exit "$EXIT_FAILURE"
     ##Attempt Haplotype Calling - creates HaplotypedVCF
     ##TODO:
     [ "$Verbose" -eq 1 ] && Log INFO "Done"
@@ -283,7 +283,7 @@ function Align {
     return "$failCount"
 }
 
-#Dispatcher for variant calling
+#Dispatcher for variant calling, runs the variant caller functions and adds RPB values
 #Inputs - the meta file to process
 #       - the variant caller to use
 #Output - None
@@ -312,9 +312,10 @@ function Call {
     local failCount=0;
     #TODO: This could potentially be parallelized
     for id in "${IDList[@]}"; do
-        RawVCFMap["$caller:$id"]="$CallDir/$id-$caller-raw.vcf.gz"
+        $label="$caller:$id"
+        RawVCFMap[$label]="$CallDir/$id-$caller-raw.vcf.gz"
         #If the call file already exists, skip
-        if [ "$Force" -eq 0 ] && [ -f "${RawVCFMap["$caller:$id"]}" ]; then
+        if [ "$Force" -eq 0 ] && [ -f "${RawVCFMap["$label"]}" ]; then
             Log INFO "\tMVs already called with $caller for $id"
             continue;
         fi
@@ -322,11 +323,16 @@ function Call {
         #Make the variant calls with the caller
         "$callFunc" "$id" "$refFile" "${AlignedFileMap["$id"]}" \
             2>| "$CallDir/$id-$caller-raw.log" |
-            bgzip >| "${RawVCFMap[$caller:$id]}" || code="$?"
+            bgzip >| "${RawVCFMap[$label]}" || code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
             Log ERROR "\t$caller calling failure for $id"
-            rm -f "${RawVCFMap["$caller:$id"]}"
+            rm -f "${RawVCFMap["$label"]}"
+            ((failCount++))
+        fi
+        #Add RPB tags
+        if ! "$RPBCmd" "${AlignedFileMap["$id"]}" "${RawVCFMap[$label]}"; then
+            Log ERROR "\tFailure to add RPB tag for $label - Check ${RawVCFMap[$label]}"
             ((failCount++))
         fi
     done
@@ -486,7 +492,6 @@ function FilterCalls {
     local vCaller="";
     local code=0;
     #First need to filter out any variants in the excluded regions
-    #Then We add RPB values to the results
     #Then we filter on HRUN, RPB, and MAC: in that order
     #MAC must come last as the RPB filter can reveal non-minor variant sites which the MAC filter can clean up
     local failCount=0
@@ -536,11 +541,6 @@ function Filter {
             rm -f "$tmpFile" "$tmpFile.csi"
             return "$EXIT_FAILURE"
         fi
-    fi
-    #Add RPB tags
-    if ! "$RPBCmd" "$alnFile" "$tmpFile"; then
-        Log ERROR "\tFailure to add RPB tag for $label - Check $tmpFile"
-        return "$EXIT_FAILURE"
     fi
     #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
     bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
@@ -726,8 +726,8 @@ function Reconcile {
     [ "$failCount" -gt 0 ] && return "$failCount"
     if [ "$(CountSites "$tmpDir/*.vcf.gz")" -gt 0 ]; then
         bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-            awk -v id="$id" '{print $0"\t"id}' 
-            #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
+            CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
+            #awk -v id="$id" '{print $0"\t"id}' 
     fi
     rm -rf "$tmpDir"
 }

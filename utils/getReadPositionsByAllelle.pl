@@ -37,7 +37,7 @@ if(@ARGV < 2){
 	"\t\tAllele is the actual allele provided\n".
 	"\t\tPositions is a comma separated list of read positions\n".
 	"\t\t For variants which span outside of a read, the position is the\n".
-	"\t\t leftmost position in the read\n".
+	"\t\t centerpoint of the reference allele in the read\n".
 	"\t\tPositions are normalized to be a proportion of the read length\n";
 }
 
@@ -57,7 +57,7 @@ sub main {
 	my $allele = substr($entry->seq,$iv->start-1,$iv->end-$iv->start+1);
 	print STDERR $allele,"\n" if($BDebug);
 	$allelePos{$allele} = [] unless(exists $allelePos{$allele});
-	my $normPos = ($iv->start-1)/length($entry->seq);
+	my $normPos = (($iv->start + $iv->end)/2-1)/length($entry->seq);
 	push(@{$allelePos{$allele}}, $normPos);
     }
     print "Chrom\tPos\tAlleleID\tAllele\tPositions\n";
