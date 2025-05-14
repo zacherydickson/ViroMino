@@ -269,9 +269,10 @@ function Align {
         unpairedStr=$(JoinBy , "${ProcessedFileMap["$id:1U"]}" "${ProcessedFileMap["$id:2U"]}")
         #Run Bowtie 2, then filter out unmapped and low qual reads and sort
         bowtie2 --threads "$NThread" --very-sensitive -x "$refIndex" -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" -U "$unpairedStr" 2>| "$AlignDir/$id.log" |
-            samtools view -h -F0x4 -q "$MinMapQual" - |
+            samtools view -h -F0x704 - |
             samtools sort -n - |
             samtools fixmate -m - - |
+            samtools view -hq "$MinMapQual" - |
             samtools sort - |
             samtools markdup -r - -  >| "${AlignedFileMap["$id"]}" ||
             code="$?"
