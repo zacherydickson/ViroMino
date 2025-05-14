@@ -1,11 +1,14 @@
 #!/usr/bin/env perl
 use warnings;
 use strict;
+use Bio::DB::HTS;
 use Class::Struct;
 use File::Basename;
+use Getopt::Std;
+
+#Local Libs
 use FindBin;
 use lib "$FindBin::Bin/../PerlLib";
-use Bio::DB::HTS;
 use MVPipe::Util::File qw(OpenFileHandle LoadMapFile);
 use MVPipe::Util::Array qw(Unique);
 
@@ -30,6 +33,12 @@ sub OutputVCFHeader($@);
 #sub pileupCallback($$$$);
 
 my %CigarOpsConsumingReference = map {($_ => 1)} qw(I S H P);
+
+my %opts;
+getopts('D',\%opts);
+if(exists $opts{D}){
+    exit 0;
+}
 
 if(@ARGV < 3){
     print STDERR "Usage: ".basename($0). " refFasta commonCalls BamMap\n";

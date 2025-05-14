@@ -3,7 +3,10 @@ use warnings;
 use strict;
 use File::Basename;
 use Class::Struct;
+use Getopt::Std;
 use POSIX qw(ceil);
+
+#Local Libs
 use FindBin;
 use lib "$FindBin::Bin/../PerlLib";
 use MVPipe::Util::File qw(OpenFileHandle);
@@ -26,6 +29,13 @@ sub LocateVariant($$);
 sub IsValidInterval($){my $iv = shift; return ($iv->end >= $iv->start);}
 sub VariantToStr($);
 sub EntryToStr($);
+
+
+my %opts;
+getopts('D',\%opts);
+if(exists $opts{D}){
+    exit 0;
+}
 
 if(@ARGV < 2){
     die "Usage: ".basename($0). " BAM Chrom Pos Ref Alt1 ... > out\n".

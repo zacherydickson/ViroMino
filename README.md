@@ -26,7 +26,13 @@ The current implementation was developed with:
 
 ## Installation
 
-No compilation required, add a link to the main script to your path as ViroMino
+No compilation required
+
+Clone the repo and its submodules, then place a link in your path
+```
+    git clone --recurse-submodules https://github.com/zacherydickson/ViroMino.git ViroMino
+    ln -s $(readlink -f ViroMino) /somewhere/in/path
+```
 
 ## Running 
 
