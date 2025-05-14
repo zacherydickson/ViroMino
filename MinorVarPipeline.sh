@@ -51,7 +51,7 @@ function usage {
 		"===This script is intended to operate on a set of samples\n" \
 		"\twith a common origin. Run multiple instances otherwise\n" \
         "===INPUTS\n" \
-        "\tMeta.txt\tsemicolon delim file with columns: ID, Path2Read1, Path2Read2\n" \
+        "\tMeta.txt\tcolon delim file with columns: ID, Path2Read1, Path2Read2\n" \
         "\t\tNote: will be accessed multiple times, cannot be temporary\n" \
         "\tref.fna\tFasta formatted (optionally gzipped) reference sequence\n" \
         "\trefIndex\tPrefix for the bowtie2 indexed reference to use\n" \
@@ -145,6 +145,7 @@ function main {
     CheckDependency bowtie2     || exit "$EXIT_FAILURE";
     CheckDependency fastp       || exit "$EXIT_FAILURE";
     CheckDependency bgzip       || exit "$EXIT_FAILURE";
+    CheckDependency bedtools    || exit "$EXIT_FAILURE";
     #Start
     [ "$Verbose" -eq 1 ] && Log INFO "Initialized"
     local metaFile="$1"; shift
