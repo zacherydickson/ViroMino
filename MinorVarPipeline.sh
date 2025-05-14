@@ -334,7 +334,8 @@ function Call {
         fi
         #Add RPB tags
         if ! "$RPBCmd" "${AlignedFileMap["$id"]}" "${RawVCFMap[$label]}"; then
-            Log ERROR "\tFailure to add RPB tag for $label - Check ${RawVCFMap[$label]}"
+            Log ERROR "\tFailure to add RPB tag for $label"
+            rm -f "${RawVCFMap["$label"]}"
             ((failCount++))
         fi
     done
