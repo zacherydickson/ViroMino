@@ -7,6 +7,7 @@ ExecDir="$(dirname "$(readlink -f "$0")")"
 source "$ExecDir/BashFunctionLibrary/variables/ExitStates.sh"
 source "$ExecDir/BashFunctionLibrary/functions/CheckDependency.sh"
 source "$ExecDir/BashFunctionLibrary/functions/CheckFile.sh"
+source "$ExecDir/BashFunctionLibrary/functions/CheckVersion.sh"
 source "$ExecDir/BashFunctionLibrary/functions/IsNumeric.sh"
 source "$ExecDir/BashFunctionLibrary/functions/JoinBy.sh"
 source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
@@ -138,15 +139,7 @@ function main {
     	usage;
     	exit "$EXIT_FAILURE";
     fi
-    #Check dependencies 
-    CheckDependency lofreq      || exit "$EXIT_FAILURE";
-    CheckDependency bcftools    || exit "$EXIT_FAILURE";
-    CheckDependency samtools    || exit "$EXIT_FAILURE";
-    CheckDependency freebayes   || exit "$EXIT_FAILURE";
-    CheckDependency bowtie2     || exit "$EXIT_FAILURE";
-    CheckDependency fastp       || exit "$EXIT_FAILURE";
-    CheckDependency bgzip       || exit "$EXIT_FAILURE";
-    CheckDependency bedtools    || exit "$EXIT_FAILURE";
+    CheckAllDependencies || exit "$EXIT_FAILURE";
     #Start
     [ "$Verbose" -eq 1 ] && Log INFO "Initialized"
     local metaFile="$1"; shift
@@ -189,6 +182,100 @@ function Log {
     level="$1"; shift
     msg="$1"; shift
     >&2 echo -e "$(date "+%H:%M:%S") [$level] $msg"
+}
+
+function CheckAllDependencies {
+    local code=0;
+    declare -a dependList=( lofreq bcftools samtools freebayes \
+                            bowtie2 fastp bgzip bedtools Rscript \
+                            perl)
+    #Check if each dependency exists
+    for depend in "${dependList[@]}"; do
+        CheckDependency "$depend" || return "$EXIT_FAILURE";
+    done
+    #Get the current versions of all dependencies
+    declare -A versions;
+    #lofreq
+    versions["cur:lofreq"]="0";
+    versions["min:lofreq"]="0";
+    versions["max:lofreq"]="";
+    #bcftools
+    versions["cur:bcftools"]="$(bcftools --version |
+                                awk '(NR==1){print $2}')";
+    versions["min:bcftools"]="1.21";
+    versions["max:bcftools"]="";
+    #samtools
+    versions["cur:samtools"]="$(samtools --version | 
+                                awk '(NR==1){print $2}')";
+    versions["min:samtools"]="1.21";
+    versions["max:samtools"]="";
+    #freebayes
+    versions["cur:freebayes"]="$(   freebayes --version | 
+                                    awk '(FNR == 1){print $2}')"
+    versions["min:freebayes"]="1.3.6";
+    versions["max:freebayes"]="";
+    #bowtie2
+    versions["cur:bowtie2"]="$( bowtie2 --version | 
+                                awk '(FNR == 1){print $3}')";
+    versions["min:bowtie2"]="2.5.4";
+    versions["max:bowtie2"]="";
+    #fastp
+    versions["cur:fastp"]="$(   fastp --version 2>&1 |
+                                awk '(FNR == 1){print $2}')";
+    versions["min:fastp"]="0.23.4";
+    versions["max:fastp"]="";
+    #bgzip
+    versions["cur:bgzip"]="$(   bgzip --version |
+                                awk '(FNR == 1){print $3}')";
+    versions["min:bgzip"]="1.21";
+    versions["max:bgzip"]="";
+    #bedtools
+    versions["cur:bedtools"]="$(bedtools --version |
+                                awk '(FNR == 1){print $2}')";
+    versions["min:bedtools"]="2.31.1";
+    versions["max:bedtools"]="";
+    #Rscript
+    versions["cur:Rscript"]="$( Rscript --version |
+                                awk '(FNR == 1){print $4}')";
+    versions["min:Rscript"]="4.3.3";
+    versions["max:Rscript"]="";
+    #Perl
+    versions["cur:perl"]="$(perl --version |
+                            grep -P 'v[0-9]+' |
+                            awk -F '\\(|)' '{print $2}')"
+    versions["min:perl"]="5.32.1";
+    versions["max:perl"]="";
+    #Check Versions
+    for depend in "${dependList[@]}"; do
+        code=0;
+        CheckVersion    "${versions["cur:$depend"]}" \
+                        "${versions["min:$depend"]}" \
+                        "${versions["max:$depend"]}"; code="$?";
+        if [ "$code" -ne 0 ]; then
+            Log ERROR "Installed $depend (${versions["cur:$depend"]}) does not meet requirements ${versions["min:$depend"]} ${versions["max:$depend"]}"
+            return "$EXIT_FAILURE";
+        fi
+    done
+    #Special Perl Module Checks
+    declare -a moduleList=(Bio::Seq Bio::DB::HTS);
+    versions["min:Bio::Seq"]="1.7.8"
+    versions["max:Bio::Seq"]=""
+    versions["min:Bio::DB::HTS"]="3.01"
+    versions["max:Bio::DB::HTS"]=""
+    for module in "${moduleList[@]}"; do
+        script="print \$$module::VERSION"
+        if ! version=$(perl -M"$module" -e "$script" 2> /dev/null); then
+            Log ERROR "Could not locate Perl Module $module";
+            return "$EXIT_FAILURE"
+        fi
+        CheckVersion    "$version" \
+                        "${versions["min:$module"]}"\
+                        "${versions["max:$module"]}"; code="$?"
+        if [ "$code" -ne 0 ]; then
+            Log ERROR "Installed perl module $module ($version) does not meet requirements ${versions["min:$module"]} ${versions["max:$module"]}";
+            return "$EXIT_FAILURE"
+        fi
+    done
 }
 
 #Run FastP on all samples
