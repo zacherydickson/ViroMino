@@ -233,7 +233,7 @@ function PreProcess {
             --cut_tail --cut_tail_window_size 4 --cut_tail_mean_quality 20 \
             --cut_right --cut_right_window_size 4 --cut_right_mean_quality 20 \
             --report_title "$id" --thread "$NThread" --html /dev/null --json /dev/null \
-            2>| "$ProcDir/${id}.log" || code="$?"
+            2>| "$ProcDir/${id}.log"; code="$?"
         #Check for successful fastp run, delete any partial output files generated
         if [ "$code" -ne 0 ]; then
             Log ERROR "\tFastP failure for $id"
@@ -327,7 +327,7 @@ function Call {
         #Make the variant calls with the caller
         "$callFunc" "$id" "$refFile" "${AlignedFileMap["$id"]}" \
             2>| "$CallDir/$id-$caller-raw.log" |
-            bgzip >| "${RawVCFMap[$label]}" || code="$?"
+            bgzip >| "${RawVCFMap[$label]}"; code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
             Log ERROR "\t$caller calling failure for $id"
@@ -409,7 +409,7 @@ function Call_freebayes {
     tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
     #Call freebayes, then filter non-minor variant sites (mac < 1)
     freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" |
-        FilterVCFByMAC /dev/stdin 1 >| "$tmpFile" || code="$?"
+        FilterVCFByMAC /dev/stdin 1 >| "$tmpFile"; code="$?"
     #Check if freeebays worked before continuing
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tfreebayes failure for $id - Check $tmpFile"
@@ -417,7 +417,7 @@ function Call_freebayes {
         return "$EXIT_FAILURE"
     fi
     #Calculate the value of HRUN for the INDELS
-    AddHRUN2freebayes "$tmpFile" "$refFile" || code="$?"
+    AddHRUN2freebayes "$tmpFile" "$refFile"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tAddHRUN2freebayes failure - Check $tmpFile"
         return "$EXIT_FAILURE"
@@ -471,7 +471,7 @@ function AddHRUN2freebayes {
             BEGIN{OFS="\t"}
             /^>/{split(substr($1,2),a,":|-"); chrom=a[1];pos=a[2];next}
             {l=length($0); sub(substr($0,1,1)"+","",$0); print chrom,pos,l-length($0)}
-        ' > "$tmpFile" || code="$?"
+        ' > "$tmpFile"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tFailure to Calculate Freebayes HRUN for $id"
         rm -f "$tmpFile"
@@ -487,7 +487,7 @@ function AddHRUN2freebayes {
             print; next
         }
         (HRUN[$1,$2]){$8=$8";HRUN="HRUN[$1,$2]}1
-    ' "$tmpFile" "$vcfFile" || code="$?"
+    ' "$tmpFile" "$vcfFile"; code="$?"
     if [ "$code" -ne 0 ]; then 
         Log ERROR "\tFailure to add HRUN field to $vcfFile - Check $tmpFile"
         return "$EXIT_FAILURE"
@@ -523,7 +523,7 @@ function FilterCalls {
         [ "$Verbose" -eq 1 ] && Log INFO "\tFiltering MV calls for $label ..."
         local filtFile="${FilteredVCFMap["$label"]}" 
         Filter "$label" "${AlignedFileMap["$id"]}" "${RawVCFMap["$label"]}" |
-            bgzip >| "$filtFile" || code="$?"
+            bgzip >| "$filtFile" ; code="$?"
         if [ "$code" -ne 0 ]; then
             Log ERROR "\tFiltering or compression failure for $label"
             ((failCount++))
@@ -562,7 +562,7 @@ function Filter {
     #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
     bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
         FilterVCFByRPB /dev/stdin "$MaxRPB" |
-        FilterVCFByMAC /dev/stdin "$MinMAC" || code="$?"
+        FilterVCFByMAC /dev/stdin "$MinMAC"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "\nFailure in filtering by RPB/MAC/HRUN for $label - Check $tmpFile"
         return "$EXIT_FAILURE"
@@ -727,7 +727,7 @@ function Reconcile {
     for filtVCF in "$@"; do
         outFile="$tmpDir/$(basename "$filtVCF")"
         bcftools norm -a -m- "$filtVCF" 2> >(grep -v '^Lines' >&2) |
-            bgzip >| "$outFile" || code="$?"
+            bgzip >| "$outFile"; code="$?"
         if [ "$code" -ne 0 ]; then
             Log ERROR "\tFailure to normalize $(basename "$filtVCF")";
             rm -f "$outFile"
@@ -822,7 +822,7 @@ function ReExpand {
     #Pileup the results and clean everything up
     "$PileupCmd" "$refFile" "$CommonCallsFile" <(ConstructBamMapFile) |
         awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
-        bgzip > "$ExpandedVCFFile" || code="$?"
+        bgzip > "$ExpandedVCFFile"; code="$?"
     #bcftools mpileup --regions-file <(cut "$CommonCallsFile" -f1,2 | tail -n+2 | sort | uniq) --fasta-ref "$refFile" \
     #    --bam-list <( printf "%s\n" "${AlignedFileMap[@]}" ) --max-depth "$MaxPileupDepth" \
     #    -q "$MinMapQual" --ignore-RG --annotate "FORMAT/AD" --threads "$NThread" \
@@ -833,7 +833,7 @@ function ReExpand {
     #    bcftools reheader --samples <(printf "%s\n" "${!AlignedFileMap[@]}") - |
     #    AddCCAnnote "$CommonCallsFile" /dev/stdin |
     #    awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
-    #    bgzip > "$ExpandedVCFFile" || code="$?"
+    #    bgzip > "$ExpandedVCFFile"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "Failure to generate expanded vcf"
         rm -f "$ExpandedVCFFile"
@@ -887,7 +887,7 @@ function ConstructBamMapFile {
 #            for(i=1;i<=n;i++){print posList[i]"\t"Count[posList[i]]
 #            }
 #        }
-#    ' "$commonCalls" | bgzip > "$tmpFile" || code="$?"
+#    ' "$commonCalls" | bgzip > "$tmpFile"; code="$?"
 #    #Check that construction worked and attempt indexing
 #    if [ "$code" -ne 0 ] || ! tabix -b2 -e2 "$tmpFile"; then
 #        Log ERROR "Failure to generate and index NCALL annotation"
@@ -943,7 +943,7 @@ function ConstructBamMapFile {
 #            }
 #            print
 #        }
-#    ' "$commonCalls" "$in" || code="$?"
+#    ' "$commonCalls" "$in"; code="$?"
 #    if [ "$code" -ne 0 ]; then
 #        Log ERROR "Failure to add CC Annotation to VCF file"
 #        return "$EXIT_FAILURE"
