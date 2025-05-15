@@ -283,7 +283,7 @@ sub CallSite2VCFStr($){
         push(@altAlleles,@alleles);
     }
     my $altStr = join(",",@altAlleles);
-    return join("\t",(  $obj->chrom,$obj->pos,$obj->ref,$altStr));
+    return join("\t",(  $obj->chrom,$obj->pos,".",$obj->ref,$altStr));
 }
 
 #Given a cigar array and an offset within an alignment, determine the position within an alignment where a variant position is
@@ -355,7 +355,7 @@ sub OutputVCFHeader($@) {
     foreach my $contig (sort keys %contigLenMap){
         print "##contig=<ID=$contig,length=$contigLenMap{$contig}>\n";
     }
-    print   "##INFO=<ID=INDEL=1,Number=0,Type=Flag,Description=\"Indicates variant isa an INDEL\">\n".
+    print   "##INFO=<ID=INDEL=1,Number=0,Type=Flag,Description=\"Indicates variant is an INDEL\">\n".
             "##INFO=<ID=NCALL=1,Number=1,Type=Integer,Description=\"Number of samples in which this site was called\">\n".
             "##FORMAT=<ID=DP,Number=1,Type=Integer,\"Number of reads overlapping a position\">\n".
             "##FORMAT=<ID=AD,Number=R,Type=Integer,\"Allelic depths\">\n".

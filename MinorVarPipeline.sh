@@ -196,7 +196,7 @@ function Log {
 #ExitCode - The Number of samples for which fastpFailed
 #TODO: Increase Modularity by splitting into a function that iterates and one that does the work
 function PreProcess {
-    [ "$Verbose" -eq 1 ] && Log INFO "Beginning Preprocessing"
+    [ "$Verbose" -eq 1 ] && Log INFO "Beginning Preprocessing - PreProcDir=$ProcDir"
     local  metaFile="$1"; shift
     mkdir -p "$ProcDir"
     #Preprocess the raw data with fastp
@@ -251,7 +251,7 @@ function PreProcess {
 #Inputs - metaFile
 #TODO: Increase Modularity by splitting into a function that iterates and one that does the work
 function Align {
-    [ "$Verbose" -eq 1 ] && Log INFO "Beginning Alignment"
+    [ "$Verbose" -eq 1 ] && Log INFO "Beginning Alignment - AlnDir=$AlignDir"
     local metaFile="$1"; shift
     local refIndex="$1"; shift
     local failCount=0;
