@@ -12,6 +12,7 @@ source "$ExecDir/BashFunctionLibrary/functions/JoinBy.sh"
 source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
 RPBCmd="$ExecDir/utils/AddRPBInfoTag.sh"
 PileupCmd="$ExecDir/utils/CustomPileup.pl"
+FilterVCFByRPBCmd="$ExecDir/utils/FilterVCFByRPB.awk"
 
 ##Default Values
 
@@ -561,7 +562,7 @@ function Filter {
     fi
     #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
     bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
-        FilterVCFByRPB /dev/stdin "$MaxRPB" |
+        "$FilterVCFByRPBCmd" /dev/stdin "$MaxRPB" |
         FilterVCFByMAC /dev/stdin "$MinMAC"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "\nFailure in filtering by RPB/MAC/HRUN for $label - Check $tmpFile"
@@ -570,105 +571,105 @@ function Filter {
     rm -f "$tmpFile" "$tmpFile.csi"
 }
 
-#Filters out sites where the RPB is higher than some thereshold
-#   specificially it determines which allelese have RPB less than threshold
-#   sites with less than 2 passing allelese are filtered completely
-#   any failing alleles, and their info tags are removed
-#Inputs - an uncompressed vcf file with an INFO RPB field
-#       - the RPB threshold to use
-#Output - print to stdout the filtered vcf file
-function FilterVCFByRPB {
-    local vcf="$1"; shift;
-    local rpb="$1"; shift;
-    awk -v th="$rpb" '
-        BEGIN {OFS="\t"}
-        /^##INFO/ {
-            split(substr($0,12),a,",");
-            split(a[2],b,"=");
-            InfoNumType[a[1]]=b[2];
-            
-        }
-        /^##FORMAT/ {
-            split(substr($0,14),a,",");
-            split(a[2],b,"=");
-            FormatNumType[a[1]]=b[2];
-        }
-        /^#/{print; next}
-        {
-            n=split($8,info,";")
-            split("",allelePass,"")
-            nPass=0;
-            for(i=1;i<=n;i++){
-                split(info[i],a,"=");
-                key=a[1]
-                val=a[2]
-                if(key=="RPB"){
-                    m=split(val,b,",");
-                    for(j=1;j<=m;j++){
-                        allelePass[j]=0;
-                        if(b[j]<=th){
-                            nPass++
-                            allelePass[j]=1
-                        }
-                    }
-                }
-            }
-            if(nPass < 2){next}
-            nAlt = split($5,a,",")
-            altStr=""
-            for(i=1;i<=nAlt;i++){
-                if(allelePass[i+1]){
-                    altStr=altStr","a[i]
-                }
-            }
-            $5=substr(altStr,2)
-            infoStr=""
-            for(i=1;i<=n;i++){
-                split(info[i],a,"=");
-                key=a[1]
-                val=a[2]
-                numType=InfoNumType[key]
-                if(numType == "A" || numType == "R" || numType == "G"){
-                    m=split(val,b,",")
-                    off = 0
-                    s=","b[1]
-                    if(numType == "A") {s="";off = 1}
-                    for(j=2-off;j<=m;j++){
-                        if(allelePass[j+off]){
-                            s = s "," b[j]
-                        }
-                    }
-                    info[i]=key"="substr(s,2)
-                }
-                infoStr=infoStr";"info[i]
-            }
-            $8=substr(infoStr,2)
-            n=split($9,fmt,":")
-            split($10,format,":")
-            formatStr=""
-            for(i=1;i<=n;i++){
-                key=fmt[i]
-                val=format[i]
-                numType=FormatNumType[key]
-                if(numType == "A" || numType == "R" || numType == "G"){
-                    m=split(val,b,",")
-                    off = 0
-                    s=","b[1]
-                    if(numType == "A") {s="";off = 1}
-                    for(j=2-off;j<=m;j++){
-                        if(allelePass[j+off]){
-                            s = s "," b[j]
-                        }
-                    }
-                    format[i]=substr(s,2)
-                }
-                formatStr=formatStr":"format[i]
-            }
-            $10 = substr(formatStr,2)
-            print
-        }
-    ' "$vcf"
-}
+##Filters out sites where the RPB is higher than some thereshold
+##   specificially it determines which allelese have RPB less than threshold
+##   sites with less than 2 passing allelese are filtered completely
+##   any failing alleles, and their info tags are removed
+##Inputs - an uncompressed vcf file with an INFO RPB field
+##       - the RPB threshold to use
+##Output - print to stdout the filtered vcf file
+#function FilterVCFByRPB {
+#    local vcf="$1"; shift;
+#    local rpb="$1"; shift;
+#    awk -v th="$rpb" '
+#        BEGIN {OFS="\t"}
+#        /^##INFO/ {
+#            split(substr($0,12),a,",");
+#            split(a[2],b,"=");
+#            InfoNumType[a[1]]=b[2];
+#            
+#        }
+#        /^##FORMAT/ {
+#            split(substr($0,14),a,",");
+#            split(a[2],b,"=");
+#            FormatNumType[a[1]]=b[2];
+#        }
+#        /^#/{print; next}
+#        {
+#            n=split($8,info,";")
+#            split("",allelePass,"")
+#            nPass=0;
+#            for(i=1;i<=n;i++){
+#                split(info[i],a,"=");
+#                key=a[1]
+#                val=a[2]
+#                if(key=="RPB"){
+#                    m=split(val,b,",");
+#                    for(j=1;j<=m;j++){
+#                        allelePass[j]=0;
+#                        if(b[j]<=th){
+#                            nPass++
+#                            allelePass[j]=1
+#                        }
+#                    }
+#                }
+#            }
+#            if(nPass < 2){next}
+#            nAlt = split($5,a,",")
+#            altStr=""
+#            for(i=1;i<=nAlt;i++){
+#                if(allelePass[i+1]){
+#                    altStr=altStr","a[i]
+#                }
+#            }
+#            $5=substr(altStr,2)
+#            infoStr=""
+#            for(i=1;i<=n;i++){
+#                split(info[i],a,"=");
+#                key=a[1]
+#                val=a[2]
+#                numType=InfoNumType[key]
+#                if(numType == "A" || numType == "R" || numType == "G"){
+#                    m=split(val,b,",")
+#                    off = 0
+#                    s=","b[1]
+#                    if(numType == "A") {s="";off = 1}
+#                    for(j=2-off;j<=m;j++){
+#                        if(allelePass[j+off]){
+#                            s = s "," b[j]
+#                        }
+#                    }
+#                    info[i]=key"="substr(s,2)
+#                }
+#                infoStr=infoStr";"info[i]
+#            }
+#            $8=substr(infoStr,2)
+#            n=split($9,fmt,":")
+#            split($10,format,":")
+#            formatStr=""
+#            for(i=1;i<=n;i++){
+#                key=fmt[i]
+#                val=format[i]
+#                numType=FormatNumType[key]
+#                if(numType == "A" || numType == "R" || numType == "G"){
+#                    m=split(val,b,",")
+#                    off = 0
+#                    s=","b[1]
+#                    if(numType == "A") {s="";off = 1}
+#                    for(j=2-off;j<=m;j++){
+#                        if(allelePass[j+off]){
+#                            s = s "," b[j]
+#                        }
+#                    }
+#                    format[i]=substr(s,2)
+#                }
+#                formatStr=formatStr":"format[i]
+#            }
+#            $10 = substr(formatStr,2)
+#            print
+#        }
+#    ' "$vcf"
+#}
 
 #Take the set of calls for an individual sample and output the sites upon which all callers agree
 #If any sample fails, no common calls file is generated, as incomplete data is undesirable
