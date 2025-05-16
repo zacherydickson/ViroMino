@@ -312,6 +312,7 @@ function PreProcess {
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tPreprocessing reads for $id ..."
         local code=0;
+        local fastpLog="$ProcDir/${id}.log"
         #Run Fastp without dedup or merging
         fastp -i "$path1" -I "$path2" -o "${ProcessedFileMap["$id:1P"]}" -O "${ProcessedFileMap["$id:2P"]}" \
             --unpaired1 "${ProcessedFileMap["$id:1U"]}" --unpaired2 "${ProcessedFileMap["$id:2U"]}" \
@@ -321,10 +322,10 @@ function PreProcess {
             --cut_tail --cut_tail_window_size 4 --cut_tail_mean_quality 20 \
             --cut_right --cut_right_window_size 4 --cut_right_mean_quality 20 \
             --report_title "$id" --thread "$NThread" --html /dev/null --json /dev/null \
-            2>| "$ProcDir/${id}.log"; code="$?"
+            2>| "$fastpLog" ; code="$?"
         #Check for successful fastp run, delete any partial output files generated
         if [ "$code" -ne 0 ]; then
-            Log ERROR "\tFastP failure for $id"
+            Log ERROR "\tFastP failure for $id - Check $fastpLog"
             for segment in 1P 2P 1U 2U; do
                 rm -f "${ProcessedFileMap["$id:$segment"]}"
             done
@@ -355,8 +356,9 @@ function Align {
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tAligning reads for $id ..."
         unpairedStr=$(JoinBy , "${ProcessedFileMap["$id:1U"]}" "${ProcessedFileMap["$id:2U"]}")
+        local bowtie2Log="$AlignDir/$id.log"
         #Run Bowtie 2, then filter out unmapped and low qual reads and sort
-        bowtie2 --threads "$NThread" --very-sensitive -x "$refIndex" -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" -U "$unpairedStr" 2>| "$AlignDir/$id.log" |
+        bowtie2 --threads "$NThread" --very-sensitive -x "$refIndex" -1 "${ProcessedFileMap["$id:1P"]}" -2 "${ProcessedFileMap["$id:2P"]}" -U "$unpairedStr" 2>| "$bowtie2Log" |
             samtools view -h -F0x704 - |
             samtools sort -n - |
             samtools fixmate -m - - |
@@ -366,7 +368,7 @@ function Align {
             code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
-            Log ERROR "\tBowtie2/samtools failure for $id"
+            Log ERROR "\tBowtie2/samtools failure for $id - Check $bowtie2Log"
             rm -f "${AlignedFileMap["$id"]}"
             ((failCount++))
         fi
@@ -412,13 +414,14 @@ function Call {
             continue;
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tCalling $caller MVs for $id ..."
+        local callLog="$CallDir/$id-$caller-raw.log";
         #Make the variant calls with the caller
         "$callFunc" "$id" "$refFile" "${AlignedFileMap["$id"]}" \
-            2>| "$CallDir/$id-$caller-raw.log" |
+            2>| "$callLog" |
             bgzip >| "${RawVCFMap[$label]}"; code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
-            Log ERROR "\t$caller calling failure for $id"
+            Log ERROR "\t$caller calling failure for $id - Check $callLog"
             rm -f "${RawVCFMap["$label"]}"
             ((failCount++))
         fi
