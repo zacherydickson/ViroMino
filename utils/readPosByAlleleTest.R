@@ -64,6 +64,7 @@ if(is.null(posList$Ref)){
 results <- sapply(posList,calcWilcoxSignedRankSum) |> phredScale()
 #Reorder the results so the reference comes first
 results <- results[c(length(results),1:(length(results)-1))]
+results[results > maxPhred] <- maxPhred
 #paste things together
 paste(results,collapse=",") |> cat()
 
