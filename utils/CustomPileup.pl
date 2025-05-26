@@ -15,7 +15,7 @@ use MVPipe::Util::Array qw(Unique);
 struct (PaddedVariantSet => {ref => '$', alleles => '@', len => '$'});
 #alt_idx_by_sample is a sample keyed hashref of comma sep strings of alt indexes
 #   alt numbering goes from 1 - n_allele
-struct (CallSite => {   chrom => '$', pos => '$', ref => '$', n_call => '$',
+struct (CallSite => {   chrom => '$', pos => '$', ref => '$', s_call => '@',
                         ref_len => '$', n_allele => '$', indel => '$',
                         max_pad_len => '$', each_var_set => '@', 
                         alt_idx_str_by_smpl => '%'}); 
@@ -49,6 +49,8 @@ sub main {
     my ($refFile, $commonCallsFile, $bamMapFile, $maxReadLen) = @_;
     my %htsMap = GetHTSObjects($bamMapFile,$refFile);
     my @sampleNames = sort keys %htsMap;
+    my %sampleIdxMap;
+    @sampleIdxMap{@sampleNames} = (0 .. $#sampleNames);
     my @callSites = LoadCommonCalls($commonCallsFile,@sampleNames);
     #foreach my $site (@callSites){
     #    print CallSite2Str($site),"\n";
@@ -115,7 +117,9 @@ sub main {
                                             join(",",@allelicConsistency),
                                             $altIdxStr));
         }
-        my $infoStr = "NCALL=".$callSite->n_call;
+        my @smplIdx = sort @sampleIdxMap{@{$callSite->s_call}};
+        my $infoStr = "NCALL=".scalar(@smplIdx);
+        $infoStr .= ";SCALL=".join(",",@smplIdx);
         $infoStr .= ";INDEL" if($callSite->indel);
         print  join("\t",(  CallSite2VCFStr($callSite),('.') x 2,
                             $infoStr,$formatStr)),"\n";
@@ -145,7 +149,7 @@ sub LoadCommonCalls($@){
         unless(exists $uniqSites{$label}){
             $uniqSites{$label} = CallSite->new( chrom => $chrom, pos => $pos,
                                                 ref => undef, each_var_set => [],
-                                                indel => $bIndel, n_call => 0);
+                                                indel => $bIndel, s_call => []);
         }
         unless(exists $refAltSetDict{$label}){
             $refAltSetDict{$label} = {};
@@ -204,7 +208,7 @@ sub LoadCommonCalls($@){
                 }
             }
         }
-        $callSite->n_call(scalar keys %sampleSet);
+        $callSite->s_call([keys %sampleSet]);
         my $nAllele = 1;
         my %alleleIdxBySample = map {($_ => [])} @sampleNames;
         my $altIdx = 1;
@@ -357,10 +361,11 @@ sub OutputVCFHeader($@) {
     }
     print   "##INFO=<ID=INDEL=1,Number=0,Type=Flag,Description=\"Indicates variant is an INDEL\">\n".
             "##INFO=<ID=NCALL=1,Number=1,Type=Integer,Description=\"Number of samples in which this site was called\">\n".
+            "##INFO=<ID=SCALL=1,Number=.,Type=Integer,Description=\"The (zero-indexed) sample numbers in which this site was called\">\n".
             "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Number of reads overlapping a position\">\n".
             "##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n".
             "##FORMAT=<ID=ACO,Number=R,Type=Integer,Description=\"Number of reads consistent with an allele\">\n".
-            "##FORMAT=<ID=CCA,Number=1,Type=String,Description=\"The confidently called alt allele(s), if any, in this sample\">\n".
+            "##FORMAT=<ID=CCA,Number=.,Type=Integer,Description=\"The indexes of the alt allele(s), if any, called in this sample\">\n".
             "#".join("\t",(qw(CHROM POS ID REF ALT QUAL FILTER INFO FORMAT),@sampleNames))."\n"
             ;
 }
