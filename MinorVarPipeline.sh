@@ -29,6 +29,7 @@ ForceFrom="";
 ProcDir="$WorkDir/processedReads"
 AlignDir="$WorkDir/alignments"
 CallDir="$WorkDir/calls"
+ErrEstFile="$WorkDir/ErrorRateEstimate.tab"
 CommonCallsFile="$WorkDir/CommonCalls.tab"
 ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
 HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
@@ -38,8 +39,8 @@ declare -A RawVCFMap
 declare -A FilteredVCFMap
 declare -a IDList
 declare -a VCallerList=(lofreq freebayes);
-declare -a PipelineStepList=(init process align call filter reconcile expand haplotype)
-declare -A PipelineStepsSet;
+declare -a PipelineStepList=(init process align errest call filter reconcile expand haplotype)
+declare -A PipelineStepSet;
 for step in "${PipelineStepList[@]}"; do
     PipelineStepSet["$step"]=1;
 done
@@ -47,7 +48,9 @@ ExclusionBedFile=""
 MinMapQual=30
 MaxHRUN=5
 MACAlpha=0.01
+MINMAF="R"
 MaxRPB=13
+ReadLen=150
 MinNCallers="${#VCallerList[@]}"
 #MaxPileupDepth=1000
 Verbose=0
@@ -68,14 +71,20 @@ function usage {
         "\t $(basename "$ProcDir")\tThe quality and adapter trimmed reads\n" \
         "\t $(basename "$AlignDir")\tThe bam files from aligning to the reference\n" \
         "\t $(basename "$CallDir")\tBoth raw and filtered calls for each sample with each caller\n" \
+        "\t $(basename "$ErrEstFile")\tEstimated Per-Base Error Rates for each sample\n" \
         "\t $(basename "$CommonCallsFile")\tThe mv sites which were agreed upon by all callers\n" \
         "\t $(basename "$ExpandedVCFFile")\tThe information at all common sites, even if the site was not\n" \
         "\t\t called in a particular sample\n" \
         "\t $(basename "$HaplotypedVCFFile")\tSame info as expanded, but with nearby variants combined\n" \
 		"===OPTIONS\n" \
         "\t-f STR\tForce execution of all steps including and after this one\n" \
-        "\t\tSTR must be one of ${PipelineStepList[@]}\n" \
+        "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
+        "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
         "\t-m (0,1)εZ=$MACAlpha\tThe confidence level for Minimum Minor Allele Count\n" \
+        "\t-M R|B|[0,1]εR=$MINMAF\tThe minimum minor allele frequency filter mode; One of\n" \
+        "\t\tR - Greater than Per Read Error Rate; PRER = 1 - (1-PBER/3)^ReadLen\n" \
+        "\t\tB - Greater than Per Base Error Rate; PBER\n" \
+        "\t\tA value between 0 and 1, exclusive to use a fixed minimum MAF\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
         "\t-q [0,∞)εR=$MinMapQual\tMinimum mapping quality for reads\n" \
         "\t-r [0,∞)εZ=$MaxHRUN\tThe maximum allowable homopolymer length near an indel\n" \
@@ -85,6 +94,7 @@ function usage {
         "\t-x PATH\tA bed formatted file defining genomic regions to exclude from analysis\n" \
 		"===FLAGS\n" \
         "\t-F\tForce execution of all pipeline steps; alias for -f init\n" \
+        "\t-v\tVerbose Logging information\n" \
 		"\t-h\tDisplay this message and exit" \
         ;
 }
@@ -95,7 +105,7 @@ function usage {
 
 function main {
     #Process Options
-    while getopts "f:m:p:q:r:t:w:x:Fvh" opts; do
+    while getopts "f:l:m:M:p:q:r:t:w:x:Fvh" opts; do
     	case $opts in
             f)
                 ForceFrom="$OPTARG";
@@ -104,9 +114,19 @@ function main {
                     exit "$EXIT_FAILURE"
                 fi
                 ;;
+            l)
+                ReadLen="$OPTARG"
+                IsNumeric "$ReadLen" PosInt || exit "$EXIT_FAILURE"
+                ;;
             m)
                 MACAlpha="$OPTARG"
                 IsNumeric "$MACAlpha" OpenUnitIV || exit "$EXIT_FAILURE"
+                ;;
+            M)
+                MINMAF="$OPTARG"
+                if [ "$MINMAF" != "R" ] && [ "$MINMAF" != "B" ]; then
+                    IsNumeric "$MINMAF" UnitIV || exit "$EXIT_FAILURE"
+                fi
                 ;;
             p)
                 MaxRPB="$OPTARG"
@@ -170,6 +190,7 @@ function main {
     ProcDir="$WorkDir/processedReads"
     AlignDir="$WorkDir/alignments"
     CallDir="$WorkDir/calls"
+    ErrEstFile="$WorkDir/ErrorRateEstimate.tab"
     CommonCallsFile="$WorkDir/CommonCalls.tab"
     ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
     HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
@@ -180,6 +201,8 @@ function main {
     [ "$ForceFrom" == "align" ] && Force=1;
     Align "$metaFile" "$refIndex" || exit "$EXIT_FAILURE"
 	#Call MV Sites with different callers - Fills in Raw VCF Map
+    [ "$ForceFrom" == "errest" ] && Force=1;
+    EstimateError "$metaFile" || exit "$EXIT_FAILURE"
     [ "$ForceFrom" == "call" ] && Force=1;
     for vCaller in "${VCallerList[@]}"; do
         Call "$metaFile" "$refFile" "$vCaller" || exit "$EXIT_FAILURE" 
@@ -387,8 +410,7 @@ function Align {
             samtools fixmate -m - - |
             samtools view -hq "$MinMapQual" - |
             samtools sort - |
-            samtools markdup -r - -  >| "${AlignedFileMap["$id"]}" ||
-            code="$?"
+            samtools markdup -r - -  >| "${AlignedFileMap["$id"]}";  code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
             Log ERROR "\tBowtie2/samtools failure for $id - Check $bowtie2Log"
@@ -398,6 +420,41 @@ function Align {
     done
     [ "$Verbose" -eq 1 ] && Log INFO "Alignment Complete"
     return "$failCount"
+}
+
+function EstimateError {
+    [ "$Verbose" -eq 1 ] && Log INFO "Beginning Error Rate Estimation - OutFile=$ErrEstFile"
+    local metaFile="$1"; shift
+    #If the error rate file already exists, we can skip it
+    if [ "$Force" -eq 0 ] && [ -f "$ErrEstFile" ]; then
+        Log INFO "Error Rates already estimated"
+        return "$EXIT_SUCCESS";
+    fi
+    local code=0;
+    #Pileup the viral aligned reads and pull out the allelelic depths
+    #Count the number of reads at each site which do not support the consensus allele
+    #Add pseudocounts (1 non-consensus and 1 consensus read) to deal with division by zero
+    bcftools mpileup --no-reference "$AlignDir"/*.bam 2> >(grep -Pv '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
+        bcftools query -HH -f "[%AD\t]\n" | 
+        awk -v rl="$ReadLen" 'BEGIN{OFS="\t"; print "Sample\tPerBase\tPerRead"}
+            /^#/{for(i=1;i<=NF;i++){n=split($i,a,"/"); Label[i]=substr(a[n],1,length(a[n])-7)};next}
+            {for(i=1;i<=NF;i++){
+                n=split($i,a,",");
+                t=0;m=-1;
+                for(j=1;j<=n;j++){t+=a[j];if(a[j]>m){m=a[j]}}
+                T[i]+=t-m;N[i]+=t}
+            }
+            END{for(k in T){
+                pber=(T[k]+1)/(N[k]+2);
+                prer=1-(1-pber/3)^rl;
+                print Label[k],pber,prer
+            }}' >| "$ErrEstFile"; code="$?"
+    if [ "$code" -ne 0 ]; then
+        Log ERROR "Error Rate Estimation Failure"
+        rm -f "$ErrEstFile"
+        return "$EXIT_FAILURE"
+    fi
+
 }
 
 #Dispatcher for variant calling, runs the variant caller functions and adds RPB values
@@ -552,6 +609,13 @@ function FilterVCFByMAC {
     local vcf="$1"; shift
     local mode="$1"; shift
     local thresh="$1"; shift
+    local tmpFile;
+    tmpFile="$CallDir/macfilt_$(RandomString 8).tmp.vcf"
+    if ! cat "$vcf" >| "$tmpFile"; then
+        rm -f "$tmpFile"
+        return "$EXIT_FAILURE"
+    fi
+    local code=0;
     awk '
         BEGIN{MACLine=1}
         (ARGIND == 1){MAC[FNR]=$1;next}
@@ -566,20 +630,35 @@ function FilterVCFByMAC {
             MACLine++
         }
         (nPass>1)
-    '  <(CalcMAC "$vcf" "$mode" "$thresh") "$vcf"
+    '  <(CalcMAC "$tmpFile" "$mode" "$thresh") "$tmpFile"; code="$?"
+    if [ "$code" -ne 0 ]; then
+        Log ERROR "\tFailure to Filter by MAC ($mode $th) - Check $tmpFile"
+        return "$EXIT_FAILURE"
+    fi
+    rm -f "$tmpFile"
 }
 
 function CalcMAC {
     local vcf="$1"; shift
     local mode="$1"; shift
     local th="$1"; shift
+    local code=0;
+    #Mode where a specific value is used at all sites
     if [ "$mode" == "count" ]; then
-        bcftools view -H MVPipe/calls/M_526_G-freebayes-raw.vcf.gz |
-            awk -v mac="$th" '{print mac}'
-        return "$EXIT_SUCCESS"
+        bcftools view -H "$vcf" |
+            awk -v mac="$th" '{print mac}'; code="$?"
+        return "$code"
+    #Mode where a minor allele count is calculated from a confidence level
+    elif [ "$mode" == "alpha" ]; then
+        { echo "$th"; bcftools query -f "%DP\n" "$vcf"; } |
+            Rscript -e 'n <- file("stdin") |> readLines() |> as.numeric(); zsq <- qnorm(n[1])^2; (n[-1]*zsq/(n[-1]+zsq)) |> ceiling() |> as.character() |> writeLines()'; code="$?"
+        return "$code"
+    #Mode where a minimum allele frequency is used
+    elif [ "$mode" == "af" ]; then
+        { echo "$th"; bcftools query -f "%DP\n" "$vcf"; } |
+            Rscript -e 'n <- file("stdin") |> readLines() |> as.numeric(); af <- n[1]; n <- n[-1]; (n*af) |> ceiling() |> as.character() |> writeLines()'; code="$?"
+        return "$code";
     fi
-    { echo "$th"; bcftools query -f "%DP\n" MVPipe/calls/M_526_G-freebayes-raw.vcf.gz; } |
-        Rscript -e 'n <- file("stdin") |> readLines() |> as.numeric(); zsq <- qnorm(n[1])^2; (n[-1]*zsq/(n[-1]+zsq)) |> ceiling() |> as.character() |> writeLines()'
 }
 
 #Determines the HRUN value for freebayes variants
@@ -648,6 +727,14 @@ function FilterCalls {
     local failCount=0
     for label in "${!RawVCFMap[@]}"; do 
         IFS=":" read -r vCaller id <<< "$label";
+        af="$MINMAF"
+        #Allele frequency threshold based on Per-Read Error Rate
+        if [ "$af" == "R" ]; then
+            af=$(awk -v s="$id" '($1 == s){print $3}' "$ErrEstFile")
+        #Allelle frequency threshold based on Per-Base Error Rate
+        elif [ "$af" == "B" ]; then
+            af=$(awk -v s="$id" '($1 == s){print $2}' "$ErrEstFile")
+        fi
         FilteredVCFMap["$label"]="$CallDir/$id-$vCaller-filt.vcf.gz"
         #If the call file already exists, skip
         if [ "$Force" -eq 0 ] && [ -f "${FilteredVCFMap["$label"]}" ]; then
@@ -656,7 +743,7 @@ function FilterCalls {
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tFiltering MV calls for $label ..."
         local filtFile="${FilteredVCFMap["$label"]}" 
-        Filter "$label" "${AlignedFileMap["$id"]}" "${RawVCFMap["$label"]}" |
+        Filter "$label" "${AlignedFileMap["$id"]}" "${RawVCFMap["$label"]}" "$af" |
             bgzip >| "$filtFile" ; code="$?"
         if [ "$code" -ne 0 ]; then
             Log ERROR "\tFiltering or compression failure for $label"
@@ -676,6 +763,7 @@ function Filter {
     local label="$1"; shift
     local alnFile="$1"; shift
     local rawFile="$1"; shift
+    local af="$1"; shift
     local tmpFile;
     local code=0;
     tmpFile="$CallDir/filter_${label}_$(RandomString 8).tmp.vcf.gz"
@@ -696,6 +784,7 @@ function Filter {
     #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
     bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
         "$FilterVCFByRPBCmd" /dev/stdin "$MaxRPB" |
+        FilterVCFByMAC /dev/stdin "af" "$af" | 
         FilterVCFByMAC /dev/stdin "alpha" "$MACAlpha"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "\nFailure in filtering by RPB/MAC/HRUN for $label - Check $tmpFile"
@@ -703,106 +792,6 @@ function Filter {
     fi
     rm -f "$tmpFile" "$tmpFile.csi"
 }
-
-##Filters out sites where the RPB is higher than some thereshold
-##   specificially it determines which allelese have RPB less than threshold
-##   sites with less than 2 passing allelese are filtered completely
-##   any failing alleles, and their info tags are removed
-##Inputs - an uncompressed vcf file with an INFO RPB field
-##       - the RPB threshold to use
-##Output - print to stdout the filtered vcf file
-#function FilterVCFByRPB {
-#    local vcf="$1"; shift;
-#    local rpb="$1"; shift;
-#    awk -v th="$rpb" '
-#        BEGIN {OFS="\t"}
-#        /^##INFO/ {
-#            split(substr($0,12),a,",");
-#            split(a[2],b,"=");
-#            InfoNumType[a[1]]=b[2];
-#            
-#        }
-#        /^##FORMAT/ {
-#            split(substr($0,14),a,",");
-#            split(a[2],b,"=");
-#            FormatNumType[a[1]]=b[2];
-#        }
-#        /^#/{print; next}
-#        {
-#            n=split($8,info,";")
-#            split("",allelePass,"")
-#            nPass=0;
-#            for(i=1;i<=n;i++){
-#                split(info[i],a,"=");
-#                key=a[1]
-#                val=a[2]
-#                if(key=="RPB"){
-#                    m=split(val,b,",");
-#                    for(j=1;j<=m;j++){
-#                        allelePass[j]=0;
-#                        if(b[j]<=th){
-#                            nPass++
-#                            allelePass[j]=1
-#                        }
-#                    }
-#                }
-#            }
-#            if(nPass < 2){next}
-#            nAlt = split($5,a,",")
-#            altStr=""
-#            for(i=1;i<=nAlt;i++){
-#                if(allelePass[i+1]){
-#                    altStr=altStr","a[i]
-#                }
-#            }
-#            $5=substr(altStr,2)
-#            infoStr=""
-#            for(i=1;i<=n;i++){
-#                split(info[i],a,"=");
-#                key=a[1]
-#                val=a[2]
-#                numType=InfoNumType[key]
-#                if(numType == "A" || numType == "R" || numType == "G"){
-#                    m=split(val,b,",")
-#                    off = 0
-#                    s=","b[1]
-#                    if(numType == "A") {s="";off = 1}
-#                    for(j=2-off;j<=m;j++){
-#                        if(allelePass[j+off]){
-#                            s = s "," b[j]
-#                        }
-#                    }
-#                    info[i]=key"="substr(s,2)
-#                }
-#                infoStr=infoStr";"info[i]
-#            }
-#            $8=substr(infoStr,2)
-#            n=split($9,fmt,":")
-#            split($10,format,":")
-#            formatStr=""
-#            for(i=1;i<=n;i++){
-#                key=fmt[i]
-#                val=format[i]
-#                numType=FormatNumType[key]
-#                if(numType == "A" || numType == "R" || numType == "G"){
-#                    m=split(val,b,",")
-#                    off = 0
-#                    s=","b[1]
-#                    if(numType == "A") {s="";off = 1}
-#                    for(j=2-off;j<=m;j++){
-#                        if(allelePass[j+off]){
-#                            s = s "," b[j]
-#                        }
-#                    }
-#                    format[i]=substr(s,2)
-#                }
-#                formatStr=formatStr":"format[i]
-#            }
-#            $10 = substr(formatStr,2)
-#            print
-#        }
-#    ' "$vcf"
-#}
 
 #Take the set of calls for an individual sample and output the sites upon which all callers agree
 #If any sample fails, no common calls file is generated, as incomplete data is undesirable
@@ -957,17 +946,6 @@ function ReExpand {
     "$PileupCmd" "$refFile" "$CommonCallsFile" <(ConstructBamMapFile) |
         awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
         bgzip > "$ExpandedVCFFile"; code="$?"
-    #bcftools mpileup --regions-file <(cut "$CommonCallsFile" -f1,2 | tail -n+2 | sort | uniq) --fasta-ref "$refFile" \
-    #    --bam-list <( printf "%s\n" "${AlignedFileMap[@]}" ) --max-depth "$MaxPileupDepth" \
-    #    -q "$MinMapQual" --ignore-RG --annotate "FORMAT/AD" --threads "$NThread" \
-    #    --no-version 2> >(grep -Pv '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
-    #    CleanAnnotations /dev/stdin | 
-    #    AddNCallAnnote "$WorkDir" "$CommonCallsFile" /dev/stdin |
-    #    bcftools view --trim-unseen-allele --no-version - |
-    #    bcftools reheader --samples <(printf "%s\n" "${!AlignedFileMap[@]}") - |
-    #    AddCCAnnote "$CommonCallsFile" /dev/stdin |
-    #    awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
-    #    bgzip > "$ExpandedVCFFile"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "Failure to generate expanded vcf"
         rm -f "$ExpandedVCFFile"
@@ -981,108 +959,6 @@ function ConstructBamMapFile {
         echo -e "$id\t${AlignedFileMap[$id]}";
     done
 }
-
-##Remove unwanted annotations from the VCF file
-##Inputs - a vcf file to clean
-##Output - Prints the modified VCF to stderr
-#function CleanAnnotations {
-#    inVcf="$1";shift
-#    #Get the list of default annotations to remove
-#    declare -a deannotateList;
-#    local deannotateStr
-#    #Get the default list of annotations
-#    readarray -t deannotateList < \
-#        <(bcftools mpileup --annotate "?" 2>&1 | grep '^\* INFO' | cut -f2 -d' ')
-#    #Remove the auxillary calling tags and the genotype likelihoods
-#    deannotateList+=(INFO/DP INFO/I16 INFO/QS FORMAT/PL)
-#    deannotateStr=$(JoinBy "," "${deannotateList[@]}");
-#    bcftools annotate --no-version -x "$deannotateStr" "$inVcf" || return "$EXIT_FAILURE"
-#}
-#
-##Given a file containing called MV sites and a vcf file, adds INFO/NCALLS
-##   Which specifies the number of samples where the site was confidently called
-##Inputs - a directory in which to place temporary files
-##       - A common calls text file
-##       - a VCF file, can be a temporary file
-##Output - Prints the modified VCF to stdout
-#function AddNCallAnnote {
-#    local workDir=$1; shift
-#    local commonCalls=$1; shift
-#    local in="$1"; shift
-#    local code=0;
-#    local tmpFile;
-#    tmpFile="$workDir/reexpand-ncall_$(RandomString 8).tmp.tab.gz" 
-#    #Build annotation file
-#    awk '
-#        (FNR==1){next}
-#        {Count[$1"\t"$2]++}
-#        END{
-#            n=asorti(Count,posList);
-#            for(i=1;i<=n;i++){print posList[i]"\t"Count[posList[i]]
-#            }
-#        }
-#    ' "$commonCalls" | bgzip > "$tmpFile"; code="$?"
-#    #Check that construction worked and attempt indexing
-#    if [ "$code" -ne 0 ] || ! tabix -b2 -e2 "$tmpFile"; then
-#        Log ERROR "Failure to generate and index NCALL annotation"
-#        rm -f "$tmpFile" "$tmpFile.tbi"
-#        return "$EXIT_FAILURE"
-#    fi
-#    #Other annotation vars
-#    columnStr="CHROM,POS,INFO/NCALL"
-#    headerLine='##INFO=<ID=NCALL,Number=1,Type=Integer,Description="Number of samples in which this site was called">'
-#    #Attempt Annotation
-#    if ! bcftools annotate --no-version -a "$tmpFile" -c "$columnStr" -h <( echo "$headerLine") "$in"; then 
-#        >&2  echo "[ERROR] Failure to add INFO/NCALL Annotation - Check $tmpFile"
-#        return "$EXIT_FAILURE"
-#    fi
-#    #Cleanup
-#    rm -f "$tmpFile" "$tmpFile.tbi"
-#}
-#
-##Using the commonCalls File generates CC annotations to add to the input vcf
-##   Annotations are added with awk, so the input must be uncompressed
-##Inputs - A common calls text file
-##       - a VCF file, can be a temporary file
-##Output - Prints the modified VCF to stdout
-#function AddCCAnnote {
-#    local commonCalls=$1; shift
-#    local in="$1"; shift
-#    local code=0;
-#    awk -F '\\t' '
-#        BEGIN {OFS="\t"}
-#        (ARGIND == 1){
-#            if(FNR > 1){
-#                CCSite[$1,$2,$6]=$4;
-#            }
-#            next
-#        }
-#        /^##/{print; next}
-#        /^#CHROM/{
-#            Desc = "The Confidently Called Alt Allele(s), if any, in this sample"
-#            print "##FORMAT=<ID=CCA,Number=1,Type=String,Description=\""Desc"\">"
-#            for(i=9;i<=NF;i++){
-#                SampleName[i]=$i;
-#            }
-#            print;next;
-#        }
-#        {
-#            emptyFormat=($9==".")
-#            CCSite[$1,$2,"FORMAT"]="CCA"
-#            for(i=9;i<=NF;i++){
-#                CC="."
-#                smpl=SampleName[i]
-#                if(CCSite[$1,$2,smpl]) { CC=CCSite[$1,$2,smpl] }
-#                if(emptyFormat){ $i=CC } else { $i=$i":"CC }
-#            }
-#            print
-#        }
-#    ' "$commonCalls" "$in"; code="$?"
-#    if [ "$code" -ne 0 ]; then
-#        Log ERROR "Failure to add CC Annotation to VCF file"
-#        return "$EXIT_FAILURE"
-#    fi
-#}
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS
 if [ "${BASH_SOURCE[0]}" == "${0}" ]; then 
