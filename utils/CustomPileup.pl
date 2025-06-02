@@ -112,7 +112,14 @@ sub main {
                 }
             }
             my $altIdxStr = $callSite->alt_idx_str_by_smpl($smplName);
-            my @allelicFreq = map {sprintf("%0.03f",$_/$dp)} @allelicDepth;
+            my @allelicFreq;
+            foreach my $ad (@allelicDepth) {
+                my $af = ".";
+                if($dp > 0){
+                    $af = sprintf("%0.03f",$_/$dp);
+                }
+                push(@allelicFreq,$af);
+            }
             $formatStr .= "\t".join(":",(   $dp,
                                             join(",",@allelicDepth),
                                             join(",",@allelicFreq),
