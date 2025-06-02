@@ -116,7 +116,7 @@ sub main {
             foreach my $ad (@allelicDepth) {
                 my $af = ".";
                 if($dp > 0){
-                    $af = sprintf("%0.03f",$_/$dp);
+                    $af = sprintf("%0.03f",$ad/$dp);
                 }
                 push(@allelicFreq,$af);
             }
