@@ -25,6 +25,7 @@ fi
 NThread=1;
 WorkDir="MVPipe"
 Force=0;
+ForceFrom="";
 ProcDir="$WorkDir/processedReads"
 AlignDir="$WorkDir/alignments"
 CallDir="$WorkDir/calls"
@@ -37,10 +38,15 @@ declare -A RawVCFMap
 declare -A FilteredVCFMap
 declare -a IDList
 declare -a VCallerList=(lofreq freebayes);
+declare -a PipelineStepList=(init process align call filter reconcile expand haplotype)
+declare -A PipelineStepsSet;
+for step in "${PipelineStepList[@]}"; do
+    PipelineStepSet["$step"]=1;
+done
 ExclusionBedFile=""
 MinMapQual=30
 MaxHRUN=5
-MinMAC=6
+MACAlpha=0.01
 MaxRPB=13
 MinNCallers="${#VCallerList[@]}"
 #MaxPileupDepth=1000
@@ -67,7 +73,9 @@ function usage {
         "\t\t called in a particular sample\n" \
         "\t $(basename "$HaplotypedVCFFile")\tSame info as expanded, but with nearby variants combined\n" \
 		"===OPTIONS\n" \
-        "\t-m [1,∞)εZ=$MinMAC\tThe minimum number of reads supporting a minor allele\n" \
+        "\t-f STR\tForce execution of all steps including and after this one\n" \
+        "\t\tSTR must be one of ${PipelineStepList[@]}\n" \
+        "\t-m (0,1)εZ=$MACAlpha\tThe confidence level for Minimum Minor Allele Count\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
         "\t-q [0,∞)εR=$MinMapQual\tMinimum mapping quality for reads\n" \
         "\t-r [0,∞)εZ=$MaxHRUN\tThe maximum allowable homopolymer length near an indel\n" \
@@ -76,7 +84,7 @@ function usage {
         "\t\tWill be created if necessary\n" \
         "\t-x PATH\tA bed formatted file defining genomic regions to exclude from analysis\n" \
 		"===FLAGS\n" \
-        "\t-f\tForce execution of all pipeline steps\n" \
+        "\t-F\tForce execution of all pipeline steps; alias for -f init\n" \
 		"\t-h\tDisplay this message and exit" \
         ;
 }
@@ -87,11 +95,18 @@ function usage {
 
 function main {
     #Process Options
-    while getopts "m:p:q:r:t:w:x:fvh" opts; do
+    while getopts "f:m:p:q:r:t:w:x:Fvh" opts; do
     	case $opts in
+            f)
+                ForceFrom="$OPTARG";
+                if [ "${PipelineStepSet["$ForceFrom"]}" -ne 1 ]; then
+                    Log ERROR "Attempt to force after uncrecognized pipeline phase ($ForceFrom)"
+                    exit "$EXIT_FAILURE"
+                fi
+                ;;
             m)
-                MinMAC="$OPTARG"
-                IsNumeric "$MinMAC" Natural || exit "$EXIT_FAILURE"
+                MACAlpha="$OPTARG"
+                IsNumeric "$MACAlpha" OpenUnitIV || exit "$EXIT_FAILURE"
                 ;;
             p)
                 MaxRPB="$OPTARG"
@@ -116,7 +131,7 @@ function main {
                 ExclusionBedFile="$OPTARG"
                 CheckFile "$ExclusionBedFile" "Exclusion Bed File" || exit "$EXIT_FAILURE"
                 ;;
-            f)
+            F)
                 Force=1
                 ;;
             v)
@@ -142,6 +157,7 @@ function main {
     CheckAllDependencies || exit "$EXIT_FAILURE";
     #Start
     [ "$Verbose" -eq 1 ] && Log INFO "Initialized"
+    [ "$ForceFrom" == "init" ] && Force=1;
     local metaFile="$1"; shift
     local refFile="$1"; shift
     local refIndex="$1"; shift
@@ -158,20 +174,27 @@ function main {
     ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
     HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
     #PreProcess the fastq Files - Fills in ProcessedFileMap
+    [ "$ForceFrom" == "process" ] && Force=1;
     PreProcess "$metaFile" || exit "$EXIT_FAILURE"
 	#Align the reads - Fills in AlignedFileMap
+    [ "$ForceFrom" == "align" ] && Force=1;
     Align "$metaFile" "$refIndex" || exit "$EXIT_FAILURE"
 	#Call MV Sites with different callers - Fills in Raw VCF Map
+    [ "$ForceFrom" == "call" ] && Force=1;
     for vCaller in "${VCallerList[@]}"; do
         Call "$metaFile" "$refFile" "$vCaller" || exit "$EXIT_FAILURE" 
     done
     #Filter each individual set of calls  - Fills in FilteredVCFMap
+    [ "$ForceFrom" == "filter" ] && Force=1;
     FilterCalls "$metaFile" || exit "$EXIT_FAILURE"
     #Get the set of sites which are common to all callers - creates CommonCalls
+    [ "$ForceFrom" == "reconcile" ] && Force=1;
     ReconcileCalls "$metaFile" || exit "$EXIT_FAILURE"
     #Re-expand sites which were retained in at least one sample - creates ExpandedVCF
+    [ "$ForceFrom" == "expand" ] && Force=1;
     ReExpand "$metaFile" "$refFile" || exit "$EXIT_FAILURE"
     ##Attempt Haplotype Calling - creates HaplotypedVCF
+    [ "$ForceFrom" == "haplotype" ] && Force=1;
     ##TODO:
     [ "$Verbose" -eq 1 ] && Log INFO "Done"
 }
@@ -351,7 +374,7 @@ function Align {
         AlignedFileMap["$id"]="$AlignDir/$id.bam"
         #If not forcing and the alignment file exists skip this id
         if [ "$Force" -eq 0 ] && [ -f "${AlignedFileMap["$id"]}" ]; then
-            Log INFO "\tReads already Aligned for $id"
+            [ "$Verbose" -eq 1 ] && Log INFO "\tReads already Aligned for $id"
             continue;
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tAligning reads for $id ..."
@@ -410,7 +433,7 @@ function Call {
         RawVCFMap[$label]="$CallDir/$id-$caller-raw.vcf.gz"
         #If the call file already exists, skip
         if [ "$Force" -eq 0 ] && [ -f "${RawVCFMap["$label"]}" ]; then
-            Log INFO "\tMVs already called with $caller for $id"
+            [ "$Verbose" -eq 1 ] && Log INFO "\tMVs already called with $caller for $id"
             continue;
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tCalling $caller MVs for $id ..."
@@ -500,7 +523,7 @@ function Call_freebayes {
     tmpFile="$CallDir/fb_${id}_$(RandomString 8).tmp.vcf"
     #Call freebayes, then filter non-minor variant sites (mac < 1)
     freebayes -f "$refFile" --max-complex-gap 75 -p 1 --pooled-continuous "$alnFile" |
-        FilterVCFByMAC /dev/stdin 1 >| "$tmpFile"; code="$?"
+        FilterVCFByMAC /dev/stdin count 1 >| "$tmpFile"; code="$?"
     #Check if freeebays worked before continuing
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tfreebayes failure for $id - Check $tmpFile"
@@ -519,13 +542,19 @@ function Call_freebayes {
 #Filters out sites where the MAC is lower than some thereshold
 #   specifically it ensures there are at least 2 allelic depths greater than the threshold
 #   this allows a sample with two non-reference alleles to pass
+#NOTE: It is required that the input VCF have a DP info field
 #Inputs - an uncompressed vcf file with a FORMAT AD field
-#       - the MAC threshold to use
+#       - the threshold mode, count if the threshold is to be interpreted as a read count otherwise interpreted
+#           as an alpha value
+#       - a threshold to use
 #Output - print to stdout the filtered vcf file
 function FilterVCFByMAC {
     local vcf="$1"; shift
+    local mode="$1"; shift
     local thresh="$1"; shift
-    awk -v mac="$thresh" '
+    awk '
+        BEGIN{MACLine=1}
+        (ARGIND == 1){MAC[FNR]=$1;next}
         /^#/{print;next}
         {   
             n=split($9,fmt,":");
@@ -533,10 +562,24 @@ function FilterVCFByMAC {
             if(ADidx==-1){exit 1}
             split($10,val,":");
             n=split(val[ADidx],AD,",");
-            nPass=0; for(i=1;i<=n;i++){if(AD[i]>=mac){nPass++}}
+            nPass=0; for(i=1;i<=n;i++){if(AD[i]>=MAC[MACLine]){nPass++}}
+            MACLine++
         }
         (nPass>1)
-    '  "$vcf"
+    '  <(CalcMAC "$vcf" "$mode" "$thresh") "$vcf"
+}
+
+function CalcMAC {
+    local vcf="$1"; shift
+    local mode="$1"; shift
+    local th="$1"; shift
+    if [ "$mode" == "count" ]; then
+        bcftools view -H MVPipe/calls/M_526_G-freebayes-raw.vcf.gz |
+            awk -v mac="$th" '{print mac}'
+        return "$EXIT_SUCCESS"
+    fi
+    { echo "$th"; bcftools query -f "%DP\n" MVPipe/calls/M_526_G-freebayes-raw.vcf.gz; } |
+        Rscript -e 'n <- file("stdin") |> readLines() |> as.numeric(); zsq <- qnorm(n[1])^2; (n[-1]*zsq/(n[-1]+zsq)) |> ceiling() |> as.character() |> writeLines()'
 }
 
 #Determines the HRUN value for freebayes variants
@@ -608,7 +651,7 @@ function FilterCalls {
         FilteredVCFMap["$label"]="$CallDir/$id-$vCaller-filt.vcf.gz"
         #If the call file already exists, skip
         if [ "$Force" -eq 0 ] && [ -f "${FilteredVCFMap["$label"]}" ]; then
-            Log INFO "\tMV calls for $label already Filtered"
+            [ "$Verbose" -eq 1 ] && Log INFO "\tMV calls for $label already Filtered"
             continue;
         fi
         [ "$Verbose" -eq 1 ] && Log INFO "\tFiltering MV calls for $label ..."
@@ -653,7 +696,7 @@ function Filter {
     #Filter by HRUN, RPB, then MAC tags, then Bgzip to final file
     bcftools filter -e "HRUN > $MaxHRUN" "$tmpFile" | 
         "$FilterVCFByRPBCmd" /dev/stdin "$MaxRPB" |
-        FilterVCFByMAC /dev/stdin "$MinMAC"; code="$?"
+        FilterVCFByMAC /dev/stdin "alpha" "$MACAlpha"; code="$?"
     if [ "$code" -ne 0 ]; then
         Log ERROR "\nFailure in filtering by RPB/MAC/HRUN for $label - Check $tmpFile"
         return "$EXIT_FAILURE"
@@ -904,7 +947,7 @@ function ReExpand {
     local code=0
     #If the common calls file already exists, we can skip it
     if [ "$Force" -eq 0 ] && [ -f "$ExpandedVCFFile" ]; then
-        Log INFO "MV calls already ReExpanded"
+        [ "$Verbose" -eq 1 ] && Log INFO "MV calls already ReExpanded"
         return "$EXIT_SUCCESS";
     fi
     [ "$Verbose" -eq 1 ] && Log INFO "ReExpanding MV calls ..."
