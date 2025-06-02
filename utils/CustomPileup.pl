@@ -59,7 +59,7 @@ sub main {
     #Iterate over call Sites
     foreach my $callSite (sort {$a->pos <=> $b->pos} @callSites) {
         #Iterate over hts Objects in order of name
-        my $formatStr = "DP:AD:ACO:CCA";
+        my $formatStr = "DP:AD:AF:ACO:CCA";
         foreach my $smplName (@sampleNames){
             my $hts = $htsMap{$smplName};
             my $maxPaddedLen = $callSite->max_pad_len;
@@ -112,8 +112,10 @@ sub main {
                 }
             }
             my $altIdxStr = $callSite->alt_idx_str_by_smpl($smplName);
+            my @allelicFreq = map {sprintf("%0.03f",$_/$dp)} @allelicDepth;
             $formatStr .= "\t".join(":",(   $dp,
                                             join(",",@allelicDepth),
+                                            join(",",@allelicFreq),
                                             join(",",@allelicConsistency),
                                             $altIdxStr));
         }
@@ -364,6 +366,7 @@ sub OutputVCFHeader($@) {
             "##INFO=<ID=SCALL=1,Number=.,Type=Integer,Description=\"The (zero-indexed) sample numbers in which this site was called\">\n".
             "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Number of reads overlapping a position\">\n".
             "##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">\n".
+            "##FORMAT=<ID=AF,Number=R,Type=Float,Description=\"Allelic Frequency\">\n".
             "##FORMAT=<ID=ACO,Number=R,Type=Integer,Description=\"Number of reads consistent with an allele\">\n".
             "##FORMAT=<ID=CCA,Number=.,Type=Integer,Description=\"The indexes of the alt allele(s), if any, called in this sample\">\n".
             "#".join("\t",(qw(CHROM POS ID REF ALT QUAL FILTER INFO FORMAT),@sampleNames))."\n"

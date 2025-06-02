@@ -1,6 +1,7 @@
 #!/bin/bash
 set -o pipefail
 
+
 FullCall="$0 $*"
 
 ExecDir="$(dirname "$(readlink -f "$0")")"
@@ -14,6 +15,7 @@ source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
 RPBCmd="$ExecDir/utils/AddRPBInfoTag.sh"
 PileupCmd="$ExecDir/utils/CustomPileup.pl"
 FilterVCFByRPBCmd="$ExecDir/utils/FilterVCFByRPB.awk"
+VERSION="$(cat "$ExecDir/Version.txt")"
 
 ##Default Values
 
@@ -95,6 +97,7 @@ function usage {
 		"===FLAGS\n" \
         "\t-F\tForce execution of all pipeline steps; alias for -f init\n" \
         "\t-v\tVerbose Logging information\n" \
+        "\t-V\tPrint the Version and exit\n" \
 		"\t-h\tDisplay this message and exit" \
         ;
 }
@@ -105,7 +108,7 @@ function usage {
 
 function main {
     #Process Options
-    while getopts "f:l:m:M:p:q:r:t:w:x:Fvh" opts; do
+    while getopts "f:l:m:M:p:q:r:t:w:x:FvVh" opts; do
     	case $opts in
             f)
                 ForceFrom="$OPTARG";
@@ -156,6 +159,10 @@ function main {
                 ;;
             v)
                 Verbose=1
+                ;;
+            V)
+                >&2 echo "V$VERSION"
+                exit "$EXIT_FAILURE"
                 ;;
     		h)
     			usage;
