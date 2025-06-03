@@ -85,7 +85,7 @@ function usage {
         "\t-m (0,1)εZ=$MACAlpha\tThe confidence level for Minimum Minor Allele Count\n" \
         "\t-M B|[0,1]εR=$MINMAF\tThe minimum minor allele frequency filter mode; One of\n" \
         "\t\tB - Greater than Per Base Error Rate; PBER\n" \
-        "\t\tA value between 0 and 1, exclusive to use a fixed minimum MAF\n" \
+        "\t\tA value between 0 and 1, exclusive - use a fixed minimum MAF\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
         "\t-q [0,∞)εR=$MinMapQual\tMinimum mapping quality for reads\n" \
         "\t-r [0,∞)εZ=$MaxHRUN\tThe maximum allowable homopolymer length near an indel\n" \
