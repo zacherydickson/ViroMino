@@ -50,7 +50,7 @@ ExclusionBedFile=""
 MinMapQual=30
 MaxHRUN=5
 MACAlpha=0.01
-MINMAF="R"
+MINMAF=0.01
 MaxRPB=13
 ReadLen=150
 MinNCallers="${#VCallerList[@]}"
@@ -83,8 +83,7 @@ function usage {
         "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
         "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
         "\t-m (0,1)εZ=$MACAlpha\tThe confidence level for Minimum Minor Allele Count\n" \
-        "\t-M R|B|[0,1]εR=$MINMAF\tThe minimum minor allele frequency filter mode; One of\n" \
-        "\t\tR - Greater than Per Read Error Rate; PRER = 1 - (1-PBER/3)^ReadLen\n" \
+        "\t-M B|[0,1]εR=$MINMAF\tThe minimum minor allele frequency filter mode; One of\n" \
         "\t\tB - Greater than Per Base Error Rate; PBER\n" \
         "\t\tA value between 0 and 1, exclusive to use a fixed minimum MAF\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
@@ -127,7 +126,7 @@ function main {
                 ;;
             M)
                 MINMAF="$OPTARG"
-                if [ "$MINMAF" != "R" ] && [ "$MINMAF" != "B" ]; then
+                if [ "$MINMAF" != "B" ]; then
                     IsNumeric "$MINMAF" UnitIV || exit "$EXIT_FAILURE"
                 fi
                 ;;
@@ -453,7 +452,7 @@ function EstimateError {
             }
             END{for(k in T){
                 pber=(T[k]+1)/(N[k]+2);
-                prer=1-(1-pber/3)^rl;
+                prer=1-(1-pber)^rl;
                 print Label[k],pber,prer
             }}' >| "$ErrEstFile"; code="$?"
     if [ "$code" -ne 0 ]; then
@@ -735,11 +734,8 @@ function FilterCalls {
     for label in "${!RawVCFMap[@]}"; do 
         IFS=":" read -r vCaller id <<< "$label";
         af="$MINMAF"
-        #Allele frequency threshold based on Per-Read Error Rate
-        if [ "$af" == "R" ]; then
-            af=$(awk -v s="$id" '($1 == s){print $3}' "$ErrEstFile")
         #Allelle frequency threshold based on Per-Base Error Rate
-        elif [ "$af" == "B" ]; then
+        if [ "$af" == "B" ]; then
             af=$(awk -v s="$id" '($1 == s){print $2}' "$ErrEstFile")
         fi
         FilteredVCFMap["$label"]="$CallDir/$id-$vCaller-filt.vcf.gz"
