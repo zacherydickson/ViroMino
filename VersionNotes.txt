@@ -1,0 +1,2 @@
+-e Version 0.4.0:
+	Added Configuration for parameter recording and comparison between runs

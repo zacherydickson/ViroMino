@@ -31,6 +31,7 @@ ForceFrom="";
 ProcDir="$WorkDir/processedReads"
 AlignDir="$WorkDir/alignments"
 CallDir="$WorkDir/calls"
+ConfigFile="$WorkDir/Config.txt"
 ErrEstFile="$WorkDir/ErrorRateEstimate.tab"
 CommonCallsFile="$WorkDir/CommonCalls.tab"
 ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
@@ -42,15 +43,17 @@ declare -A FilteredVCFMap
 declare -a IDList
 declare -a VCallerList=(lofreq freebayes);
 declare -a PipelineStepList=(init process align errest call filter reconcile expand haplotype)
-declare -A PipelineStepSet;
+declare -A PipelineStepIdxMap;
+NPipelineStep=1;
 for step in "${PipelineStepList[@]}"; do
-    PipelineStepSet["$step"]=1;
+    PipelineStepIdxMap["$step"]="$NPipelineStep";
+    ((NPipelineStep++))
 done
 ExclusionBedFile=""
 MinMapQual=30
 MaxHRUN=5
 MACAlpha=0.01
-MINMAF=0.01
+MinMAF=0.01
 MaxRPB=13
 ReadLen=150
 MinNCallers="${#VCallerList[@]}"
@@ -73,6 +76,7 @@ function usage {
         "\t $(basename "$ProcDir")\tThe quality and adapter trimmed reads\n" \
         "\t $(basename "$AlignDir")\tThe bam files from aligning to the reference\n" \
         "\t $(basename "$CallDir")\tBoth raw and filtered calls for each sample with each caller\n" \
+        "\t $(basename "$ConfigFile")\tRecord of settings and version used to generate the results\n" \
         "\t $(basename "$ErrEstFile")\tEstimated Per-Base Error Rates for each sample\n" \
         "\t $(basename "$CommonCallsFile")\tThe mv sites which were agreed upon by all callers\n" \
         "\t $(basename "$ExpandedVCFFile")\tThe information at all common sites, even if the site was not\n" \
@@ -83,7 +87,7 @@ function usage {
         "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
         "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
         "\t-m (0,1)εZ=$MACAlpha\tThe confidence level for Minimum Minor Allele Count\n" \
-        "\t-M B|[0,1]εR=$MINMAF\tThe minimum minor allele frequency filter mode; One of\n" \
+        "\t-M B|[0,1]εR=$MinMAF\tThe minimum minor allele frequency filter mode; One of\n" \
         "\t\tB - Greater than Per Base Error Rate; PBER\n" \
         "\t\tA value between 0 and 1, exclusive - use a fixed minimum MAF\n" \
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
@@ -111,7 +115,7 @@ function main {
     	case $opts in
             f)
                 ForceFrom="$OPTARG";
-                if [ "${PipelineStepSet["$ForceFrom"]}" -ne 1 ]; then
+                if [ -z "${PipelineStepIdxMap["$ForceFrom"]}" ]; then
                     Log ERROR "Attempt to force after uncrecognized pipeline phase ($ForceFrom)"
                     exit "$EXIT_FAILURE"
                 fi
@@ -125,9 +129,9 @@ function main {
                 IsNumeric "$MACAlpha" OpenUnitIV || exit "$EXIT_FAILURE"
                 ;;
             M)
-                MINMAF="$OPTARG"
-                if [ "$MINMAF" != "B" ]; then
-                    IsNumeric "$MINMAF" UnitIV || exit "$EXIT_FAILURE"
+                MinMAF="$OPTARG"
+                if [ "$MinMAF" != "B" ]; then
+                    IsNumeric "$MinMAF" UnitIV || exit "$EXIT_FAILURE"
                 fi
                 ;;
             p)
@@ -148,12 +152,21 @@ function main {
                 ;;
             w)
                 WorkDir="$OPTARG"
+                ProcDir="$WorkDir/processedReads"
+                AlignDir="$WorkDir/alignments"
+                CallDir="$WorkDir/calls"
+                ConfigFile="$WorkDir/Config.txt"
+                ErrEstFile="$WorkDir/ErrorRateEstimate.tab"
+                CommonCallsFile="$WorkDir/CommonCalls.tab"
+                ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
+                HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
                 ;;
             x)
                 ExclusionBedFile="$OPTARG"
                 CheckFile "$ExclusionBedFile" "Exclusion Bed File" || exit "$EXIT_FAILURE"
                 ;;
             F)
+                ForceFrom=init
                 Force=1
                 ;;
             v)
@@ -188,18 +201,12 @@ function main {
     local refFile="$1"; shift
     local refIndex="$1"; shift
     CheckFile "$metaFile" || exit "$EXIT_FAILURE"
+    CheckConfig "$metaFile" "$refFile" "$refIndex" || exit "$EXIT_FAILURE"
     #Index the input reference
     samtools faidx "$refFile"
     readarray -t IDList < <(cut -f1 -d: "$metaFile");
-    #Construct the working dir and vars for various paths to use
+    #Construct the working dir
     mkdir -p "$WorkDir"
-    ProcDir="$WorkDir/processedReads"
-    AlignDir="$WorkDir/alignments"
-    CallDir="$WorkDir/calls"
-    ErrEstFile="$WorkDir/ErrorRateEstimate.tab"
-    CommonCallsFile="$WorkDir/CommonCalls.tab"
-    ExpandedVCFFile="$WorkDir/expanded.vcf.gz"
-    HaplotypedVCFFile="$WorkDir/haplotyped.vcf.gz"
     #PreProcess the fastq Files - Fills in ProcessedFileMap
     [ "$ForceFrom" == "process" ] && Force=1;
     PreProcess "$metaFile" || exit "$EXIT_FAILURE"
@@ -328,6 +335,101 @@ function CheckAllDependencies {
             return "$EXIT_FAILURE"
         fi
     done
+}
+
+function CheckConfig {
+    local metaFile;
+    local refFile;
+    local refIndex;
+    local excBedFile;
+    metaFile=$(readlink -f "$1"); shift
+    refFile=$(readlink -f "$1"); shift
+    refIndex=$(readlink -f "$1"); shift
+    excBedFile=$(readlink -f "$ExclusionBedFile");
+    local code=0;
+    #If the Config File Doesn't exist it can be created
+    if ! [ -s "$ConfigFile" ]; then
+        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile"; code="$?";
+        return $code;
+    fi
+    bUpdateConfig=0;
+    #Iterate over the config file and check for differences
+    while IFS="=" read -r key value; do
+        target="";
+        forceFromMin=init;
+        case "$key" in
+            Version)
+                target="$VERSION";
+                forceFromMin=init;
+                ;;
+            metaFile)
+                target="$metaFile"
+                forceFromMin=init;
+                ;;
+            refFile)
+                target="$refFile"
+                forceFromMin=align;
+                ;;
+            refIndex)
+                target="$refIndex"
+                forceFromMin=align;
+                ;;
+            readLen)
+                target="$ReadLen"
+                forceFromMin=esterr;
+                ;;
+            macAlpha)
+                target="$MACAlpha"
+                forceFromMin=filter;
+                ;;
+            minMAF)
+                target="$MinMAF"
+                forceFromMin=filter;
+                ;;
+            maxRPB)
+                target="$MaxRPB"
+                forceFromMin=filter;
+                ;;
+            minMapQ)
+                target="$MinMapQual"
+                forceFromMin=align;
+                ;;
+            maxHRUN)
+                target="$MaxHRUN"
+                forceFromMin=call;
+                ;;
+            excludeBED)
+                target="$excBedFile"
+                forceFromMin=filter;
+                ;;
+        esac
+        forceFromIdx="$NPipelineStep"
+        [ -n "$ForceFrom" ] && forceFromIdx="${PipelineStepIdxMap[$ForceFrom]}"
+        #Check if the call value matches the config value
+        # if it doesn't match check if force after is set to the matching step
+        if [ "$value" != "$target" ]; then
+            bUpdateConfig=1;
+            if [ "${PipelineStepIdxMap[$forceFromMin]}" -lt "$forceFromIdx" ]; then
+                Log ERROR "Previous Run's $key ($value) does not match current value ($target)";
+                Log INFO "Use '-f $forceFromMin' to overwrite or select a different Working directory (-w) to proceed"
+                return "$EXIT_FAILURE"
+            fi
+        fi
+    done < "$ConfigFile"
+    if [ "$bUpdateConfig" -eq 1 ]; then
+        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile"; code="$?";
+    fi
+}
+
+function WriteConfig {
+    local metaFile="$1"; shift
+    local refFile="$1"; shift
+    local refIndex="$1"; shift
+    local excBedFile="$1"; shift
+    printf "%s\n" "Version=$VERSION" "metaFile=$metaFile" "refFile=$refFile" "refIndex=$refIndex" \
+                    "readLen=$ReadLen" "macAlpha=$MACAlpha" "minMAF=$MinMAF" "maxRPB=$MaxRPB" \
+                    "minMapQ=$MinMapQual" "maxHRUN=$MaxHRUN" "excludeBED=$excBedFile" \
+        >| "$ConfigFile"
 }
 
 #Run FastP on all samples
@@ -733,7 +835,7 @@ function FilterCalls {
     local failCount=0
     for label in "${!RawVCFMap[@]}"; do 
         IFS=":" read -r vCaller id <<< "$label";
-        af="$MINMAF"
+        af="$MinMAF"
         #Allelle frequency threshold based on Per-Base Error Rate
         if [ "$af" == "B" ]; then
             af=$(awk -v s="$id" '($1 == s){print $2}' "$ErrEstFile")
