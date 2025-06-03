@@ -54,7 +54,7 @@ MINMAF=0.01
 MaxRPB=13
 ReadLen=150
 MinNCallers="${#VCallerList[@]}"
-#MaxPileupDepth=1000
+MaxPileupDepth=1000
 Verbose=0
 
 ##HANDLE INPUTS
@@ -440,7 +440,7 @@ function EstimateError {
     #Pileup the viral aligned reads and pull out the allelelic depths
     #Count the number of reads at each site which do not support the consensus allele
     #Add pseudocounts (1 non-consensus and 1 consensus read) to deal with division by zero
-    bcftools mpileup --no-reference "$AlignDir"/*.bam 2> >(grep -Pv '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
+    bcftools mpileup -d "$MaxPileupDepth" --no-reference "$AlignDir"/*.bam 2> >(grep -Pv '(samples in [0-9]+ input files)|(maximum number of reads per)' >&2 ) |
         bcftools query -HH -f "[%AD\t]\n" | 
         awk -v rl="$ReadLen" 'BEGIN{OFS="\t"; print "Sample\tPerBase\tPerRead"}
             /^#/{for(i=1;i<=NF;i++){n=split($i,a,"/"); Label[i]=substr(a[n],1,length(a[n])-7)};next}
