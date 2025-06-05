@@ -2,3 +2,5 @@
 	Added Configuration for parameter recording and comparison between runs
 Version 0.4.1
 	Fixed bug where BashFunctionLibrary was a commit behind
+Version 0.4.2
+	Fixed Bug where Config Files were 'created' before the working directory

@@ -201,12 +201,12 @@ function main {
     local refFile="$1"; shift
     local refIndex="$1"; shift
     CheckFile "$metaFile" || exit "$EXIT_FAILURE"
+    mkdir -p "$WorkDir"
     CheckConfig "$metaFile" "$refFile" "$refIndex" || exit "$EXIT_FAILURE"
     #Index the input reference
     samtools faidx "$refFile"
     readarray -t IDList < <(cut -f1 -d: "$metaFile");
     #Construct the working dir
-    mkdir -p "$WorkDir"
     #PreProcess the fastq Files - Fills in ProcessedFileMap
     [ "$ForceFrom" == "process" ] && Force=1;
     PreProcess "$metaFile" || exit "$EXIT_FAILURE"
