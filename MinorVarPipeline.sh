@@ -116,7 +116,7 @@ function main {
             f)
                 ForceFrom="$OPTARG";
                 if [ -z "${PipelineStepIdxMap["$ForceFrom"]}" ]; then
-                    Log ERROR "Attempt to force after uncrecognized pipeline phase ($ForceFrom)"
+                    Log ERROR "Attempt to force after unrecognized pipeline phase ($ForceFrom)"
                     exit "$EXIT_FAILURE"
                 fi
                 ;;
@@ -331,7 +331,7 @@ function CheckAllDependencies {
                         "${versions["min:$module"]}"\
                         "${versions["max:$module"]}"; code="$?"
         if [ "$code" -ne 0 ]; then
-            Log ERROR "Installed perl module $module ($version) does not meet requirements ${versions["min:$module"]} ${versions["max:$module"]}";
+            Log ERROR "Installed Perl module $module ($version) does not meet requirements ${versions["min:$module"]} ${versions["max:$module"]}";
             return "$EXIT_FAILURE"
         fi
     done
