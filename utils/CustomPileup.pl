@@ -126,7 +126,7 @@ sub main {
                                             join(",",@allelicConsistency),
                                             $altIdxStr));
         }
-        my @smplIdx = sort @sampleIdxMap{@{$callSite->s_call}};
+        my @smplIdx = sort {$a <=> $b} @sampleIdxMap{@{$callSite->s_call}};
         my $infoStr = "NCALL=".scalar(@smplIdx);
         $infoStr .= ";SCALL=".join(",",@smplIdx);
         $infoStr .= ";INDEL" if($callSite->indel);
