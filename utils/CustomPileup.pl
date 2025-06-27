@@ -41,7 +41,11 @@ if(exists $opts{D}){
 }
 
 if(@ARGV < 3){
-    print STDERR "Usage: ".basename($0). " refFasta commonCalls BamMap\n";
+    print STDERR "Usage: ".basename($0). " refFasta commonCalls BamMap\n".
+                "\trefFasta - Path to a fasta file containing the reference sequence\n".
+                "\tcommonCalls - tab delim, headers of CHROM,POS,REF,ALT,Callers,and Sample\n".
+                "\t\tall calls are alleleic primatives\n".
+                "\tBamMap\tTab delim mapping between sample IDs and paths to bams\n";
     exit 0;
 }
 
@@ -128,7 +132,9 @@ sub main {
         }
         my @smplIdx = sort {$a <=> $b} @sampleIdxMap{@{$callSite->s_call}};
         my $infoStr = "NCALL=".scalar(@smplIdx);
-        $infoStr .= ";SCALL=".join(",",@smplIdx);
+        if(@smplIdx){
+            $infoStr .= ";SCALL=".join(",",@smplIdx);
+        }
         $infoStr .= ";INDEL" if($callSite->indel);
         print  join("\t",(  CallSite2VCFStr($callSite),('.') x 2,
                             $infoStr,$formatStr)),"\n";
@@ -147,12 +153,13 @@ sub LoadCommonCalls($@){
     my ($file,@sampleNames) = @_;
     my $fh = OpenFileHandle($file,"CommonCalls");
     my %uniqSites;
-    #label keyed hash of ref allele keyed hash ref of alt alleles keyed array if samples
+    #label keyed hash of ref allele keyed hash ref of alt alleles keyed array of samples
     my %refAltSetDict;
     my $header = <$fh>;
     while(my $line = <$fh>){
         chomp($line);
         my ($chrom,$pos,$ref,$alt,$vCaller,$sample) = split(/\t/,$line);
+        $sample=undef if($sample eq "");
         my $label = "$chrom.$pos";
         my $bIndel = (length($ref) != length($alt)) ? 1 : 0;
         unless(exists $uniqSites{$label}){
@@ -167,7 +174,9 @@ sub LoadCommonCalls($@){
             $refAltSetDict{$label}->{$ref} = {}
         }
         $refAltSetDict{$label}->{$ref}->{$alt} = [] unless(exists $refAltSetDict{$label}->{$ref}->{$alt});
-        push(@{$refAltSetDict{$label}->{$ref}->{$alt}},$sample);
+        if(defined $sample){
+            push(@{$refAltSetDict{$label}->{$ref}->{$alt}},$sample);
+        }
     }
     #Ensure that all reference alleles are of the same form across samples
     #   padding is added at this point which can cause multiple ref forms
