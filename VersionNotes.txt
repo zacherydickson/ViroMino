@@ -6,3 +6,5 @@ Version 0.4.2
 	Fixed Bug where Config Files were 'created' before the working directory
 Version 0.4.3
 	Bug Fix - Ensure sorted SCALL Info field
+Version 0.4.4
+	Fixed some infor being logged without the VERBOSE option

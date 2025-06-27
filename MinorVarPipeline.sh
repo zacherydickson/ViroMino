@@ -535,7 +535,7 @@ function EstimateError {
     local metaFile="$1"; shift
     #If the error rate file already exists, we can skip it
     if [ "$Force" -eq 0 ] && [ -f "$ErrEstFile" ]; then
-        Log INFO "Error Rates already estimated"
+        [ "$Verbose" -eq 1 ] && Log INFO "Error Rates already estimated"
         return "$EXIT_SUCCESS";
     fi
     local code=0;
@@ -906,7 +906,7 @@ function ReconcileCalls {
     local metaFile="$1"; shift
     #If the common calls file already exists, we can skip it
     if [ "$Force" -eq 0 ] && [ -f "$CommonCallsFile" ]; then
-        Log INFO "MV calls already Reconciled"
+        [ "$Verbose" -eq 1 ] && Log INFO "MV calls already Reconciled"
         return "$EXIT_SUCCESS";
     fi
     [ "$Verbose" -eq 1 ] && Log INFO "Beginning MV call Reconciliation"
