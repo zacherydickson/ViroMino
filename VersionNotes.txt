@@ -10,3 +10,5 @@ Version 0.4.4
 	Fixed some infor being logged without the VERBOSE option
 Version 0.5.0
 	Adding Variants of Interest Option
+Version 0.5.1
+	Config Now updates on every run

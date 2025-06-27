@@ -360,7 +360,6 @@ function CheckConfig {
         WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
         return $code;
     fi
-    bUpdateConfig=0;
     #Iterate over the config file and check for differences
     while IFS="=" read -r key value; do
         target="";
@@ -419,7 +418,6 @@ function CheckConfig {
         #Check if the call value matches the config value
         # if it doesn't match check if force after is set to the matching step
         if [ "$value" != "$target" ]; then
-            bUpdateConfig=1;
             if [ "${PipelineStepIdxMap[$forceFromMin]}" -lt "$forceFromIdx" ]; then
                 Log ERROR "Previous Run's $key ($value) does not match current value ($target)";
                 Log INFO "Use '-f $forceFromMin' to overwrite or select a different Working directory (-w) to proceed"
@@ -427,9 +425,7 @@ function CheckConfig {
             fi
         fi
     done < "$ConfigFile"
-    if [ "$bUpdateConfig" -eq 1 ]; then
-        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
-    fi
+    WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
 }
 
 function WriteConfig {
