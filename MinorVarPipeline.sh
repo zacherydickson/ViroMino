@@ -50,6 +50,7 @@ for step in "${PipelineStepList[@]}"; do
     ((NPipelineStep++))
 done
 ExclusionBedFile=""
+VariantsOfInterestFile=""
 MinMapQual=30
 MaxHRUN=5
 MACAlpha=0.01
@@ -93,6 +94,8 @@ function usage {
         "\t-p [0,∞)εR=$MaxRPB\tThe maximum Read Position Bias Value\n" \
         "\t-q [0,∞)εR=$MinMapQual\tMinimum mapping quality for reads\n" \
         "\t-r [0,∞)εZ=$MaxHRUN\tThe maximum allowable homopolymer length near an indel\n" \
+        "\t-s PATH\tA vcf formatted file containing variants to include in\n" \
+        "\t\tthe expanded vcf regardless of if they were called in any sample\n" \
         "\t-t [1,$MaxThreads]=$NThread\tNumber of threads to use\n" \
         "\t-w PATH=$WorkDir\tA working directory for intermediate files;\n" \
         "\t\tWill be created if necessary\n" \
@@ -111,7 +114,7 @@ function usage {
 
 function main {
     #Process Options
-    while getopts "f:l:m:M:p:q:r:t:w:x:FvVh" opts; do
+    while getopts "f:l:m:M:p:q:r:s:t:w:x:FvVh" opts; do
     	case $opts in
             f)
                 ForceFrom="$OPTARG";
@@ -145,6 +148,10 @@ function main {
             r)
                 MaxHRUN="$OPTARG"
                 IsNumeric "$MaxHRUN" Whole || exit "$EXIT_FAILURE"
+                ;;
+            s)
+                VariantsOfInterestFile="$OPTARG"
+                CheckFile "$VariantsOfInterestFile" "Variants of Interest File" || exit "$EXIT_FAILURE"
                 ;;
             t)
                 NThread="$OPTARG";
@@ -346,10 +353,11 @@ function CheckConfig {
     refFile=$(readlink -f "$1"); shift
     refIndex=$(readlink -f "$1"); shift
     excBedFile=$(readlink -f "$ExclusionBedFile");
+    voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
     #If the Config File Doesn't exist it can be created
     if ! [ -s "$ConfigFile" ]; then
-        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile"; code="$?";
+        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
         return $code;
     fi
     bUpdateConfig=0;
@@ -402,6 +410,9 @@ function CheckConfig {
                 target="$excBedFile"
                 forceFromMin=filter;
                 ;;
+            voiVCF)
+                target="$voiFile"
+                forceFromMin=expand;
         esac
         forceFromIdx="$NPipelineStep"
         [ -n "$ForceFrom" ] && forceFromIdx="${PipelineStepIdxMap[$ForceFrom]}"
@@ -417,7 +428,7 @@ function CheckConfig {
         fi
     done < "$ConfigFile"
     if [ "$bUpdateConfig" -eq 1 ]; then
-        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile"; code="$?";
+        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
     fi
 }
 
@@ -426,9 +437,11 @@ function WriteConfig {
     local refFile="$1"; shift
     local refIndex="$1"; shift
     local excBedFile="$1"; shift
+    local voiFile="$1"; shift
     printf "%s\n" "Version=$VERSION" "metaFile=$metaFile" "refFile=$refFile" "refIndex=$refIndex" \
                     "readLen=$ReadLen" "macAlpha=$MACAlpha" "minMAF=$MinMAF" "maxRPB=$MaxRPB" \
                     "minMapQ=$MinMapQual" "maxHRUN=$MaxHRUN" "excludeBED=$excBedFile" \
+                    "voiVCF=$voiFile" \
         >| "$ConfigFile"
 }
 
@@ -1048,7 +1061,7 @@ function ReExpand {
 
     rm -f "$ExpandedVCFFile"
     #Pileup the results and clean everything up
-    "$PileupCmd" "$refFile" "$CommonCallsFile" <(ConstructBamMapFile) |
+    "$PileupCmd" "$refFile" <(CommonCallsAndVOI) <(ConstructBamMapFile) |
         awk -v call="$FullCall" '(FNR==1){print; print "##source="call;next}1' |
         bgzip > "$ExpandedVCFFile"; code="$?"
     if [ "$code" -ne 0 ]; then
@@ -1063,6 +1076,53 @@ function ConstructBamMapFile {
     for id in "${!AlignedFileMap[@]}"; do
         echo -e "$id\t${AlignedFileMap[$id]}";
     done
+}
+
+#Outputs the common Calls file if no variants of interest were provided
+#Otherwise appends sites which do not overlap any actually called site
+function CommonCallsAndVOI {
+    cat "$CommonCallsFile"
+    if [ -z "$VariantsOfInterestFile" ]; then
+        return "$EXIT_SUCCESS"
+    fi
+    bcftools norm -m- --force -a "$VariantsOfInterestFile" 2> >(grep -v '^Lines' >&2) |
+        awk -v nCallers="${#VCallerList[@]}" '
+            BEGIN {
+                OFS="\t"
+                callersStr="";
+                for(i=1;i<=nCallers;i++){ callersStr=callersStr "0"}
+            }
+            (ARGIND == 1){
+                chrom=$1; pos=$2; ref=$3; alt=$4
+                indelLen=length(ref)-length(alt)
+                class="snp"
+                if(indelLen > 0) {class="del"}
+                if(indelLen < 0) {class="ins";indelLen *= -1}
+                nSite[chrom]++
+                Left[chrom,nSite[chrom]]=pos
+                Right[chrom,nSite[chrom]]=pos+indelLen
+                Class[chrom,nSite[chrom]]=class
+                next
+            }
+            /^#/{next}
+            {
+                chrom=$1; pos=$2; ref=$4; alt=$5
+                indelLen=length(ref)-length(alt)
+                class="snp"
+                if(indelLen > 0) {class="del"}
+                if(indelLen < 0) {class="ins"; indelLen *= -1}
+                posE = pos+indelLen
+                for(i=1;i<=nSite[chrom];i++){
+                    if(class != Class[chrom,i]){continue}
+                    if(pos >= Left[chrom,i] && pos <= Right[chrom,i]) {
+                        next;
+                    } else if(posE >= Left[chrom,i] && posE <= Right[chrom,i]) {
+                        next;
+                    }
+                }
+                print chrom,pos,ref,alt,callersStr"\t"
+            }
+        ' "$CommonCallsFile" /dev/stdin
 }
 
 ### CALL MAIN TO SIMULATE FORWARD DECLARATIONS
