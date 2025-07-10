@@ -12,3 +12,5 @@ Version 0.5.0
 	Adding Variants of Interest Option
 Version 0.5.1
 	Config Now updates on every run
+Version 0.5.2
+	mapping duplicate removal now removes supp/sec alignments of duplicates

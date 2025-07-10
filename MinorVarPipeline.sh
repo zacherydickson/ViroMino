@@ -527,7 +527,7 @@ function Align {
             samtools fixmate -m - - |
             samtools view -hq "$MinMapQual" - |
             samtools sort - |
-            samtools markdup -r - -  >| "${AlignedFileMap["$id"]}";  code="$?"
+            samtools markdup -r -S - -  >| "${AlignedFileMap["$id"]}";  code="$?"
         #Check for failure
         if [ "$code" -ne 0 ]; then
             Log ERROR "\tBowtie2/samtools failure for $id - Check $bowtie2Log"
