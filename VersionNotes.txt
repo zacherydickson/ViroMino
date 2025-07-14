@@ -14,3 +14,5 @@ Version 0.5.1
 	Config Now updates on every run
 Version 0.5.2
 	mapping duplicate removal now removes supp/sec alignments of duplicates
+Version 0.5.3
+	Fix bug where linked indexes wouldn't be logged in the config file properly

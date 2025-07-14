@@ -4,6 +4,8 @@ set -o pipefail
 
 FullCall="$0 $*"
 
+IndexDefaultSuffix="1.bt2"
+
 ExecDir="$(dirname "$(readlink -f "$0")")"
 source "$ExecDir/BashFunctionLibrary/variables/ExitStates.sh"
 source "$ExecDir/BashFunctionLibrary/functions/CheckDependency.sh"
@@ -351,7 +353,8 @@ function CheckConfig {
     local excBedFile;
     metaFile=$(readlink -f "$1"); shift
     refFile=$(readlink -f "$1"); shift
-    refIndex=$(readlink -f "$1"); shift
+    refIndex=$(readlink -f "${1}$IndexDefaultSuffix"); shift
+    refIndex="$(dirname "$refIndex")/$(basename "$refIndex" "$IndexDefaultSuffix")"
     excBedFile=$(readlink -f "$ExclusionBedFile");
     voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
