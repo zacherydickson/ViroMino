@@ -353,8 +353,8 @@ function CheckConfig {
     local excBedFile;
     metaFile=$(readlink -f "$1"); shift
     refFile=$(readlink -f "$1"); shift
-    refIndex=$(readlink -f "${1}$IndexDefaultSuffix"); shift
-    refIndex="$(dirname "$refIndex")/$(basename "$refIndex" "$IndexDefaultSuffix")"
+    refIndex=$(readlink -f "$1.$IndexDefaultSuffix"); shift
+    refIndex="$(dirname "$refIndex")/$(basename "$refIndex" ".$IndexDefaultSuffix")"
     excBedFile=$(readlink -f "$ExclusionBedFile");
     voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
