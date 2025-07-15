@@ -18,5 +18,6 @@ Version 0.5.3
 	Fix bug where linked indexes wouldn't be logged in the config file properly
 Version 0.5.4
 	Bug Fix if user provided vcf file contains variants outside the reference genome
-Version 0.5.4+LenientRecon
-	New behaviour where unfiltered calls from multiple callers may be accepted even if the filtered calls aren't present in all callers
+Version 0.6.0
+        New command line option to specifies a minimum number of callers which support a variant at both the raw calls and filtered stages; This allows some leniency where one can require a variant be present in all raw calls, but only must pass filtering in fewer callers
+            
