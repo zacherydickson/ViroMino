@@ -16,3 +16,5 @@ Version 0.5.2
 	mapping duplicate removal now removes supp/sec alignments of duplicates
 Version 0.5.3
 	Fix bug where linked indexes wouldn't be logged in the config file properly
+Version 0.5.4
+	Bug Fix if user provided vcf file contains variants outside the reference genome

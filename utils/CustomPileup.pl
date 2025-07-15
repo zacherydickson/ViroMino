@@ -19,6 +19,7 @@ struct (CallSite => {   chrom => '$', pos => '$', ref => '$', s_call => '@',
                         ref_len => '$', n_allele => '$', indel => '$',
                         max_pad_len => '$', each_var_set => '@', 
                         alt_idx_str_by_smpl => '%'}); 
+struct (SiteData => { DP => '$', AD => '@', ACO => '@', AF => '@', CCA => '$'});
 #incomplete:
 #   -1: missing left part of allele; 0: complete, 1: missing right part of allele
 struct (AlignedAllele => {subject => '$', query => '$', incomplete => '$'});
@@ -30,7 +31,8 @@ sub CallSite2VCFStr($);
 sub LocateAlignedSite($$$);
 sub GetAlignedAllele($$);
 sub OutputVCFHeader($@);
-#sub pileupCallback($$$$);
+sub ProcessSampleCallSite($$\%);
+sub SiteInfo2Str($);
 
 my %CigarOpsConsumingReference = map {($_ => 1)} qw(I S H P);
 
@@ -65,70 +67,8 @@ sub main {
         #Iterate over hts Objects in order of name
         my $formatStr = "DP:AD:AF:ACO:CCA";
         foreach my $smplName (@sampleNames){
-            my $hts = $htsMap{$smplName};
-            my $maxPaddedLen = $callSite->max_pad_len;
-            my $segment = $hts->segment($callSite->chrom,$callSite->pos,
-                                        $callSite->pos + $callSite->ref_len - 1);
-            #Find all reads overlapping this position
-            my $iterator = $segment->features(-iterator => 1, -type => 'match');
-            #Iterate over the alignments, extracting the alt sequences
-            my @allelicDepth = (0) x $callSite->n_allele;
-            my @allelicConsistency = (0) x $callSite->n_allele;
-            my $dp = 0;
-            while(my $align = $iterator->next_seq){
-                $dp++;
-                my $siteOff = LocateAlignedSite($callSite->pos - $align->start,
-                                                $align->cigar_array,0);
-                my $alnAlleleObj = GetAlignedAllele($callSite,$align);
-                #Iterate over variant sets with the same reference form 
-                my $adIdx = undef;
-                my $alleleIdx = 0;
-                foreach my $varSetObj (@{$callSite->each_var_set}){
-                    my $refAln = $alnAlleleObj->subject;
-                    my $queryAln = $alnAlleleObj->query;
-                    #Iterate over alleles
-                    foreach my $allele (@{$varSetObj->alleles}){
-                        my $alleleQ = $allele;
-                        my $alleleRef = $varSetObj->ref;
-                        my $diff = length($alleleQ) - length($refAln);
-                        if($diff > 0){
-                            next if(! $alnAlleleObj->incomplete);
-                            if($alnAlleleObj->incomplete < 0){
-                                $alleleRef = substr($alleleRef,$diff);
-                                $alleleQ = substr($allele,$diff);
-                            } else {
-                                $alleleRef = substr($alleleRef,0,-$diff);
-                                $alleleQ = substr($allele,0,-$diff);
-                            }
-                        }
-                        #Check if the read is consistent with the allele
-                        if($alleleRef eq $refAln and $alleleQ eq $queryAln){
-                            #Set the Ad to this allele, if multiple alleles
-                            # are consistent, mark as no AD
-                            $adIdx = (defined $adIdx) ? -1 : $alleleIdx;
-                            #Increment consistency counter
-                            $allelicConsistency[$alleleIdx]++;
-                        }
-                    } continue {$alleleIdx++;}
-                }
-                if(defined $adIdx and $adIdx >= 0){
-                    $allelicDepth[$adIdx]++;
-                }
-            }
-            my $altIdxStr = $callSite->alt_idx_str_by_smpl($smplName);
-            my @allelicFreq;
-            foreach my $ad (@allelicDepth) {
-                my $af = ".";
-                if($dp > 0){
-                    $af = sprintf("%0.03f",$ad/$dp);
-                }
-                push(@allelicFreq,$af);
-            }
-            $formatStr .= "\t".join(":",(   $dp,
-                                            join(",",@allelicDepth),
-                                            join(",",@allelicFreq),
-                                            join(",",@allelicConsistency),
-                                            $altIdxStr));
+            my $siteInfo = ProcessSampleCallSite($callSite,$smplName,%htsMap); 
+            $formatStr .= "\t".SiteInfo2Str($siteInfo);
         }
         my @smplIdx = sort {$a <=> $b} @sampleIdxMap{@{$callSite->s_call}};
         my $infoStr = "NCALL=".scalar(@smplIdx);
@@ -149,7 +89,6 @@ sub main {
 #           tab delim, with header of CHROM POS, etc
 #Output - An array of uniq call sites in the calls file
 sub LoadCommonCalls($@){
-    #TODO: Mixed alleles aren't loading properly
     my ($file,@sampleNames) = @_;
     my $fh = OpenFileHandle($file,"CommonCalls");
     my %uniqSites;
@@ -389,8 +328,84 @@ sub OutputVCFHeader($@) {
             ;
 }
 
-##
-#sub pileupCallback($$$$){
-#    my ($seqid,$pos,$pileup,$hts) = @_;
-#
-#}
+
+sub ProcessSampleCallSite($$\%) {
+    my $callSite = shift;
+    my $smplName = shift;
+    my $rHTSMap = shift;
+    my $hts = $rHTSMap->{$smplName};
+    #Contruct default site info with zero coverage
+    my $altIdxStr = $callSite->alt_idx_str_by_smpl($smplName);
+    my $nAllele = $callSite->n_allele;
+    my $siteInfo = SiteData->new(   DP => 0, AD => [(0) x $nAllele],
+                                    ACO => [(0) x $nAllele], CCA => $altIdxStr,
+                                    AF => [('.') x $nAllele]);
+    #If a call site is outside of the reference genome -
+    # a user provided a set of variants only some of which apply to this genome -
+    # then segment will be undefined
+    my $segment = $hts->segment($callSite->chrom,$callSite->pos,
+                                $callSite->pos + $callSite->ref_len - 1);
+    return $siteInfo unless(defined $segment);
+    #Find all reads overlapping this position
+    my $iterator = $segment->features(-iterator => 1, -type => 'match');
+    #Iterate over the alignments, extracting the alt sequences
+    while(my $align = $iterator->next_seq){
+        $siteInfo->DP($siteInfo->DP + 1);
+        my $siteOff = LocateAlignedSite($callSite->pos - $align->start,
+                                        $align->cigar_array,0);
+        my $alnAlleleObj = GetAlignedAllele($callSite,$align);
+        #Iterate over variant sets with the same reference form 
+        my $adIdx = undef;
+        my $alleleIdx = 0;
+        foreach my $varSetObj (@{$callSite->each_var_set}){
+            my $refAln = $alnAlleleObj->subject;
+            my $queryAln = $alnAlleleObj->query;
+            #Iterate over alleles
+            foreach my $allele (@{$varSetObj->alleles}){
+                my $alleleQ = $allele;
+                my $alleleRef = $varSetObj->ref;
+                my $diff = length($alleleQ) - length($refAln);
+                if($diff > 0){
+                    next if(! $alnAlleleObj->incomplete);
+                    if($alnAlleleObj->incomplete < 0){
+                        $alleleRef = substr($alleleRef,$diff);
+                        $alleleQ = substr($allele,$diff);
+                    } else {
+                        $alleleRef = substr($alleleRef,0,-$diff);
+                        $alleleQ = substr($allele,0,-$diff);
+                    }
+                }
+                #Check if the read is consistent with the allele
+                if($alleleRef eq $refAln and $alleleQ eq $queryAln){
+                    #Set the Ad to this allele, if multiple alleles
+                    # are consistent, mark as no AD
+                    $adIdx = (defined $adIdx) ? -1 : $alleleIdx;
+                    #Increment consistency counter
+                    $siteInfo->ACO->[$alleleIdx]++;
+                }
+            } continue {$alleleIdx++;}
+        }
+        #If the read is consistent with only one allele increment the depth
+        if(defined $adIdx and $adIdx >= 0){
+            $siteInfo->AD->[$adIdx]++;
+        }
+    }
+    #Calculate Allele Frequencies
+    for(my $i = 0; $i < $nAllele;$i++){
+        my $ad = $siteInfo->AD->[$i];
+        if($siteInfo->DP > 0){
+            $siteInfo->AF->[$i] = sprintf("%0.03f",$ad/$siteInfo->DP);
+        }
+    }
+    return $siteInfo;
+}
+
+
+sub SiteInfo2Str($){
+    my $self = shift;
+    return join(":",(   $self->DP,
+                        join(",",@{$self->AD}),
+                        join(",",@{$self->AF}),
+                        join(",",@{$self->ACO}),
+                        $self->CCA));
+}
