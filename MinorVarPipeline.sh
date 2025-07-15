@@ -44,6 +44,7 @@ declare -A RawVCFMap
 declare -A FilteredVCFMap
 declare -a IDList
 declare -a VCallerList=(lofreq freebayes);
+NCallers="${#VCallerList[@]}"
 declare -a PipelineStepList=(init process align errest call filter reconcile expand haplotype)
 declare -A PipelineStepIdxMap;
 NPipelineStep=1;
@@ -59,7 +60,8 @@ MACAlpha=0.01
 MinMAF=0.01
 MaxRPB=13
 ReadLen=150
-MinNCallers="${#VCallerList[@]}"
+MinRawCallers="$NCallers"
+MinFiltCallers="$NCallers"
 MaxPileupDepth=1000
 Verbose=0
 
@@ -86,6 +88,8 @@ function usage {
         "\t\t called in a particular sample\n" \
         "\t $(basename "$HaplotypedVCFFile")\tSame info as expanded, but with nearby variants combined\n" \
 		"===OPTIONS\n" \
+        "\t-c [1,$NCallers]εZ,[0,$NCallers]εZ=$MinRawCallers,$MinFiltCallers\tPair of values specifying the minimum number of callers supporting\n" \
+        "\t\ta variant before and after filtering. MVs must pass both filters\n" \
         "\t-f STR\tForce execution of all steps including and after this one\n" \
         "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
         "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
@@ -116,8 +120,21 @@ function usage {
 
 function main {
     #Process Options
-    while getopts "f:l:m:M:p:q:r:s:t:w:x:FvVh" opts; do
+    while getopts "c:f:l:m:M:p:q:r:s:t:w:x:FvVh" opts; do
     	case $opts in
+            c)
+                IFS="," read -r MinRawCallers MinFiltCallers <<< "$OPTARG";
+                IsNumeric "$MinRawCallers" PosInt || exit "$EXIT_FAILURE"
+                IsNumeric "$MinFiltCallers" NonNegInt || exit "$EXIT_FAILURE"
+                if [ "$MinRawCallers" -gt "$NCallers" ]; then
+                    Log WARNING "minRawCallers ($MinRawCallers) more than supported callers ($NCallers) - Using $NCallers"
+                    MinRawCallers="$NCallers"
+                fi
+                if [ "$MinFiltCallers" -gt "$NCallers" ]; then
+                    Log WARNING "minFiltCallers ($MinFiltCallers) more than supported callers ($NCallers) - Using $NCallers"
+                    MinFiltCallers="$NCallers"
+                fi
+                ;;
             f)
                 ForceFrom="$OPTARG";
                 if [ -z "${PipelineStepIdxMap["$ForceFrom"]}" ]; then
@@ -415,6 +432,15 @@ function CheckConfig {
             voiVCF)
                 target="$voiFile"
                 forceFromMin=expand;
+                ;;
+            minRawCallers)
+                target="$MinRawCallers"
+                forceFromMin=reconcile;
+                ;;
+            minFiltCallers)
+                target="$MinFiltCallers"
+                forceFromMin=reconcile
+                ;;
         esac
         forceFromIdx="$NPipelineStep"
         [ -n "$ForceFrom" ] && forceFromIdx="${PipelineStepIdxMap[$ForceFrom]}"
@@ -440,7 +466,7 @@ function WriteConfig {
     printf "%s\n" "Version=$VERSION" "metaFile=$metaFile" "refFile=$refFile" "refIndex=$refIndex" \
                     "readLen=$ReadLen" "macAlpha=$MACAlpha" "minMAF=$MinMAF" "maxRPB=$MaxRPB" \
                     "minMapQ=$MinMapQual" "maxHRUN=$MaxHRUN" "excludeBED=$excBedFile" \
-                    "voiVCF=$voiFile" \
+                    "voiVCF=$voiFile" "minRawCallers=$MinRawCallers" "minFiltCallers=$MinFiltCallers" \
         >| "$ConfigFile"
 }
 
@@ -958,6 +984,7 @@ function ReconcileCalls {
 #Output - a tab delim file with 5 columns:
 #           chrom, pos, ref, alt, callerstr, sample id
 function Reconcile {
+    #TODO: Incorporate Information from the raw calls to potentially give leniency i.e. in both raw calls but only one gets past the filters
     local id="$1";shift
     local code=0
     local tmpDir;
@@ -984,7 +1011,7 @@ function Reconcile {
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
     if [ "$(CountSites "$tmpDir"/*.vcf.gz)" -gt 0 ]; then
-        bcftools isec -n="$MinNCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
+        bcftools isec -n="$MinFiltCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
             awk -v id="$id" '{print $0"\t"id}' 
             #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
     fi
