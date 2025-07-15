@@ -368,12 +368,13 @@ function CheckConfig {
     local refFile;
     local refIndex;
     local excBedFile;
-    metaFile=$(readlink -f "$1"); shift
-    refFile=$(readlink -f "$1"); shift
-    refIndex=$(readlink -f "$1.$IndexDefaultSuffix"); shift
-    refIndex="$(dirname "$refIndex")/$(basename "$refIndex" ".$IndexDefaultSuffix")"
-    excBedFile=$(readlink -f "$ExclusionBedFile");
-    voiFile=$(readlink -f "$VariantsOfInterestFile");
+    local metaFile; metaFile=$(readlink -f "$1"); shift
+    local refFile; refFile=$(readlink -f "$1"); shift
+    local refIndex;
+        refIndex=$(readlink -f "$1.$IndexDefaultSuffix"); shift
+        refIndex="$(dirname "$refIndex")/$(basename "$refIndex" ".$IndexDefaultSuffix")"
+    local excBedFile; excBedFile=$(readlink -f "$ExclusionBedFile");
+    local voiFile; voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
     #If the Config File Doesn't exist it can be created
     if ! [ -s "$ConfigFile" ]; then
@@ -387,59 +388,59 @@ function CheckConfig {
         case "$key" in
             Version)
                 target="$VERSION";
-                forceFromMin=init;
+                forceFromMin="init";
                 ;;
             metaFile)
                 target="$metaFile"
-                forceFromMin=init;
+                forceFromMin="init";
                 ;;
             refFile)
                 target="$refFile"
-                forceFromMin=align;
+                forceFromMin="align";
                 ;;
             refIndex)
                 target="$refIndex"
-                forceFromMin=align;
+                forceFromMin="align";
                 ;;
             readLen)
                 target="$ReadLen"
-                forceFromMin=esterr;
+                forceFromMin="esterr";
                 ;;
             macAlpha)
                 target="$MACAlpha"
-                forceFromMin=filter;
+                forceFromMin="filter";
                 ;;
             minMAF)
                 target="$MinMAF"
-                forceFromMin=filter;
+                forceFromMin="filter";
                 ;;
             maxRPB)
                 target="$MaxRPB"
-                forceFromMin=filter;
+                forceFromMin="filter";
                 ;;
             minMapQ)
                 target="$MinMapQual"
-                forceFromMin=align;
+                forceFromMin="align";
                 ;;
             maxHRUN)
                 target="$MaxHRUN"
-                forceFromMin=call;
+                forceFromMin="call";
                 ;;
             excludeBED)
                 target="$excBedFile"
-                forceFromMin=filter;
+                forceFromMin="filter";
                 ;;
             voiVCF)
                 target="$voiFile"
-                forceFromMin=expand;
+                forceFromMin="expand";
                 ;;
             minRawCallers)
                 target="$MinRawCallers"
-                forceFromMin=reconcile;
+                forceFromMin="reconcile";
                 ;;
             minFiltCallers)
                 target="$MinFiltCallers"
-                forceFromMin=reconcile
+                forceFromMin="reconcile";
                 ;;
         esac
         forceFromIdx="$NPipelineStep"
@@ -489,7 +490,7 @@ function PreProcess {
         done
         #If not forcing and all output files exists
         if [ "$Force" -eq 0 ]; then
-            bPass=1;
+            local bPass=1;
             for segment in 1P 2P 1U 2U; do
                 f="${ProcessedFileMap["$id:$segment"]}"
                 if [ ! -f "$f" ]; then
@@ -616,7 +617,7 @@ function Call {
     [ "$Verbose" -eq 1 ] && Log INFO "Beginning MV Calling with $caller"
     local code=0;
     mkdir -p "$CallDir"
-    callFunc="";
+    local callFunc="";
     case "$caller" in
         lofreq)
             callFunc="Call_lofreq"
@@ -680,8 +681,8 @@ function Call_lofreq {
 
 #Uses the faidx index for the reference genome to add contig entries to the lofreq results
 function AddContigs2lofreq {
-    refFile="$1"; shift
-    inVCF="$1"; shift
+    local refFile="$1"; shift
+    local inVCF="$1"; shift
     awk -F '\\t' '
         (ARGIND == 1){ contigStr[++nContig] = "##contig=<ID="$1",length="$2">";next}   
         (FNR == 1){ print; for(i=1;i<=nContig;i++){print contigStr[i]};next}
@@ -816,8 +817,8 @@ function AddHRUN2freebayes {
     local vcfFile="$1"; shift
     local refFile="$1"; shift
     local tmpFile;
-    local code=0;
     tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
+    local code=0;
     bcftools norm -m- --force -a "$vcfFile" 2> >(grep -v '^Lines' >&2) |
         bcftools query -f "%CHROM\t%POS\t%REF\t%ALT\n" - |
         awk -v slop=$((MaxHRUN * 2 + 2)) ' #Convert to bed region of interest
@@ -873,7 +874,7 @@ function FilterCalls {
     local failCount=0
     for label in "${!RawVCFMap[@]}"; do 
         IFS=":" read -r vCaller id <<< "$label";
-        af="$MinMAF"
+        local af="$MinMAF"
         #Allelle frequency threshold based on Per-Base Error Rate
         if [ "$af" == "B" ]; then
             af=$(awk -v s="$id" '($1 == s){print $2}' "$ErrEstFile")
@@ -908,8 +909,8 @@ function Filter {
     local rawFile="$1"; shift
     local af="$1"; shift
     local tmpFile;
-    local code=0;
     tmpFile="$CallDir/filter_${label}_$(RandomString 8).tmp.vcf.gz"
+    local code=0;
     #Check if an exclusion BED file was provided, if so filter out variants at those sites
     if [ -z "$ExclusionBedFile" ]; then 
         if ! cp "$rawFile" "$tmpFile"; then
@@ -958,14 +959,14 @@ function ReconcileCalls {
     for id in "${IDList[@]}"; do
         [ "$Verbose" -eq 1 ] && Log INFO "\tReconciling MV calls for $id ..."
         declare -a fileArr=();
-        #Get the list of filtered calls for this id
+        #Get the list of filtered and raw calls for this id
         for vCaller in "${VCallerList[@]}"; do
             local label="$vCaller:$id"
-            fileArr+=("${FilteredVCFMap["$label"]}")
+            fileArr+=("${FilteredVCFMap["$label"]}" "${RawVCFMap["$label"]}")
         done
         #Attempt reconcilliation
         if ! Reconcile "$id" "${fileArr[@]}" >> "$CommonCallsFile"; then
-            Log ERROR "\tFailure to reconcile calls for $id"
+            Log ERROR "\tFailure to reconcile calls for $id";
             ((failCount++))
             continue;
         fi
@@ -980,29 +981,28 @@ function ReconcileCalls {
 
 #Performs the reconciliation for a single sample
 #Inputs - an id for the sample
-#       - a list of filtered vcf files
+#       - a list of raw and filtered vcf files
 #Output - a tab delim file with 5 columns:
 #           chrom, pos, ref, alt, callerstr, sample id
 function Reconcile {
-    #TODO: Incorporate Information from the raw calls to potentially give leniency i.e. in both raw calls but only one gets past the filters
     local id="$1";shift
     local code=0
     local tmpDir;
     tmpDir="$WorkDir/reconcile_${id}_tmp_$(RandomString 8)" || return "$EXIT_FAILURE"
     mkdir -p "$tmpDir" || return "$EXIT_FAILURE"
-    failCount=0
-    for filtVCF in "$@"; do
-        outFile="$tmpDir/$(basename "$filtVCF")"
-        bcftools norm -a -m- "$filtVCF" 2> >(grep -v '^Lines' >&2) |
+    local failCount=0
+    for vcf in "$@"; do
+        outFile="$tmpDir/$(basename "$vcf")"
+        bcftools norm -a -m- "$vcf" 2> >(grep -v '^Lines' >&2) |
             bgzip >| "$outFile"; code="$?"
         if [ "$code" -ne 0 ]; then
-            Log ERROR "\tFailure to normalize $(basename "$filtVCF")";
+            Log ERROR "\tFailure to normalize $(basename "$vcf")";
             rm -f "$outFile"
             ((failCount++))
             continue;
         fi
         if ! bcftools index "$outFile"; then
-            Log ERROR "\tFailure to index normalized $(basename "$filtVCF")";
+            Log ERROR "\tFailure to index normalized $(basename "$vcf")";
             rm -r "$outFile.csi"
             ((failCount++))
             continue;
@@ -1010,12 +1010,33 @@ function Reconcile {
     done
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
+    #Get the list of sites that appear in the site lists for both the raw and filtered 
     if [ "$(CountSites "$tmpDir"/*.vcf.gz)" -gt 0 ]; then
-        bcftools isec -n="$MinFiltCallers" "$tmpDir"/*.vcf.gz 2> >(grep -v "Note: -w" >&2) |
-            awk -v id="$id" '{print $0"\t"id}' 
+        { 
+            GetVCFIntersection "$MinRawCallers" "$tmpDir"/*raw.vcf.gz &&
+            GetVCFIntersection "$MinFiltCallers" "$tmpDir"/*filt.vcf.gz
+        } | awk -v id="$id" '(++Count[$1,$2,$3,$4] == 2){print $0"\t"id}' || return "$EXIT_FAILURE"
             #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
     fi
     rm -rf "$tmpDir"
+}
+
+#Outputs the site list for the intersection of vcf files with some minimum number of files in which to be present
+#Note if all files are empty, bcftools isec will segfault, so this needs to be handled
+#Inputs - a minimum number of files in which sites must be present to be included in the intersection
+#       - a list of gzipped vcf files to for which to find the intersection
+#Outputs - a tab delim file with 4 columns:
+#           chrom, pos, ref, alt, callerstr
+#       Empty output is possible and valid
+function GetVCFIntersection {
+    local minN=$1; shift
+    local nNonZero=0;
+    for f in "$@"; do
+        zcat "$f" | grep -qv '^#' && ((nNonZero++))
+    done
+    #If there are no files with non-zero numbers of sites we're done
+    [ "$nNonZero" -eq 0 ] && return "$EXIT_SUCCESS"
+    bcftools isec -n+"$minN" "$@" 2> >(grep -v "Note: -w" >&2)
 }
 
 function CountSites {
