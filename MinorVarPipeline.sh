@@ -993,20 +993,20 @@ function Reconcile {
     local failCount=0
     for vcf in "$@"; do
         outFile="$tmpDir/$(basename "$vcf")"
-        bcftools norm -a -m- "$vcf" 2> >(grep -v '^Lines' >&2) |
-            bgzip >| "$outFile"; code="$?"
-        if [ "$code" -ne 0 ]; then
+        if ! bcftools norm -a -m- -Oz --write-index -o "$outFile "$vcf" "2> >(grep -v '^Lines' >&2); then
+        #    bgzip >| "$outFile"; code="$?"
+        #if [ "$code" -ne 0 ]; then
             Log ERROR "\tFailure to normalize $(basename "$vcf")";
-            rm -f "$outFile"
+            rm -f "$outFile" "$outFile.csi"
             ((failCount++))
             continue;
         fi
-        if ! bcftools index "$outFile"; then
-            Log ERROR "\tFailure to index normalized $(basename "$vcf")";
-            rm -r "$outFile.csi"
-            ((failCount++))
-            continue;
-        fi
+        #if ! bcftools index "$outFile"; then
+        #    Log ERROR "\tFailure to index normalized $(basename "$vcf")";
+        #    rm -r "$outFile.csi"
+        #    ((failCount++))
+        #    continue;
+        #fi
     done
     #Do not continue if normalization failed
     [ "$failCount" -gt 0 ] && return "$failCount"
