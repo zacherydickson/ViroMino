@@ -23,3 +23,5 @@ Version 0.6.0
             
 Version 0.6.1
 	refactor of reconciliation for more succinct code
+Version 0.6.2
+	Update to default RPB threshold based onvalidation data
