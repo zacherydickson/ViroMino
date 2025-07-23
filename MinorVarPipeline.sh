@@ -993,11 +993,10 @@ function Reconcile {
     local failCount=0
     for vcf in "$@"; do
         outFile="$tmpDir/$(basename "$vcf")"
-        if ! bcftools norm -a -m- -Oz --write-index -o "$outFile "$vcf" "2> >(grep -v '^Lines' >&2); then
+        if ! bcftools norm -a -m- -Oz --write-index -o "$outFile" "$vcf" 2> >(grep -v '^Lines' >&2); then
         #    bgzip >| "$outFile"; code="$?"
         #if [ "$code" -ne 0 ]; then
-            Log ERROR "\tFailure to normalize $(basename "$vcf")";
-            rm -f "$outFile" "$outFile.csi"
+            Log ERROR "\tFailure to normalize $(basename "$vcf") - check $tmpDir";
             ((failCount++))
             continue;
         fi
@@ -1015,7 +1014,12 @@ function Reconcile {
         { 
             GetVCFIntersection "$MinRawCallers" "$tmpDir"/*raw.vcf.gz &&
             GetVCFIntersection "$MinFiltCallers" "$tmpDir"/*filt.vcf.gz
-        } | awk -v id="$id" '(++Count[$1,$2,$3,$4] == 2){print $0"\t"id}' || return "$EXIT_FAILURE"
+        } | 
+            awk -v id="$id" '(++Count[$1,$2,$3,$4] == 2){print $0"\t"id}' || 
+            {
+                Log ERROR "\tFailure to get vcf intersections - check $tmpDir";
+                return "$EXIT_FAILURE";
+            }
             #CollapseCommonMultiallelicSites "$id" /dev/stdin || return "$EXIT_FAILURE"
     fi
     rm -rf "$tmpDir"

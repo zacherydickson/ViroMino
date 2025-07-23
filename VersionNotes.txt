@@ -20,8 +20,11 @@ Version 0.5.4
 	Bug Fix if user provided vcf file contains variants outside the reference genome
 Version 0.6.0
         New command line option to specifies a minimum number of callers which support a variant at both the raw calls and filtered stages; This allows some leniency where one can require a variant be present in all raw calls, but only must pass filtering in fewer callers
-            
 Version 0.6.1
 	refactor of reconciliation for more succinct code
 Version 0.6.2
-	Update to default RPB threshold based onvalidation data
+	Update to default RPB threshold based on validation data
+Version 0.6.3
+	Fixed Bug where reconciliation failed due to typo introduced in 0.6.1
+	Fixed Bug where genotypes at sites with multiple alleles where the reference fails the RPB filter are decremented
+	Handled Case where a called Genotype does not pass the RPB filter (discard site)

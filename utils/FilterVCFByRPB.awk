@@ -30,10 +30,13 @@ BEGIN {
     n=split($8,info,";")
     split("",allelePass,"")
     #tracks the number of alleles to the left of this allele which failed
+    #Note: If the ref allele fails but there are two passing alt alleles, the
+    #   ref allele is not removed so it mustn't be counted towards the offset
     split("",allelePassOffset,"") 
     nPass=0;
     nFail=0;
-    for(i=1;i<=n;i++){
+    refFail=0;
+    for(i=1;i<=n;i++){ #Iterate over key value pairs
         split(info[i],a,"=");
         key=a[1]
         val=a[2]
@@ -41,12 +44,15 @@ BEGIN {
             m=split(val,b,",");
             for(j=1;j<=m;j++){
                 allelePass[j]=0;
-                allelePassOffset[j]=nFail;
+                allelePassOffset[j]=nFail - refFail;
                 if(b[j]<=th){
                     nPass++
                     allelePass[j]=1
                 } else {
                     nFail++
+                    if(j==1){
+                        refFail = 1;
+                    }
                 }
             }
         }
@@ -111,6 +117,10 @@ BEGIN {
             gtStr=""
             for(j=1;j<=ploidy;j++){
                 gt = gtArr[j]
+                #IF the called genotype is not a passing allele, scrap the whole site
+                if(!allelePass[gt+1]){ 
+                    next
+                }
                 if(gt != "."){
                     gt -= allelePassOffset[gt+1]
                 }
