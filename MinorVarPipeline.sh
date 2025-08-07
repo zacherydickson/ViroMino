@@ -739,9 +739,9 @@ function Call_freebayes {
         return "$EXIT_FAILURE"
     fi
     #Calculate the value of HRUN for the INDELS
-    AddHRUN2freebayes "$tmpFile" "$refFile"; code="$?"
+    AddHRUN2VCF "$tmpFile" "$refFile" "freebayes" 1; code="$?"
     if [ "$code" -ne 0 ]; then
-        Log ERROR "\tAddHRUN2freebayes failure - Check $tmpFile"
+        Log ERROR "\tAddHRUN2VCF failure - Check $tmpFile"
         return "$EXIT_FAILURE"
     fi
     rm -f "$tmpFile" "$tmpFile.csi"
@@ -812,18 +812,26 @@ function CalcMAC {
     fi
 }
 
-#Determines the HRUN value for freebayes variants
-#Inputs - a freebayes generated vcf, uncompressed
+#Determines the HRUN value for ivar variants
+#Inputs - a vcf, uncompressed
 #           Note the VCF file is accessed twice and so cannot be temporary
 #       - a reference sequence
+#       - the caller used to generate the original vcf
+#       - a boolean determinining whether the vcf needs to be normalized first 
 #Output - a vcffile with added INFO fields for HRUN
-function AddHRUN2freebayes {
+function AddHRUN2VCF {
     local vcfFile="$1"; shift
     local refFile="$1"; shift
+    local caller="$1"; shift
+    local bNorm="$1"; shift
     local tmpFile;
-    tmpFile="$CallDir/fb_${id}_$(RandomString 8)_HRUN.tmp.tab"
+    tmpFile="$CallDir/${caller}_${id}_$(RandomString 8)_HRUN.tmp.tab"
     local code=0;
-    bcftools norm -m- --force -a "$vcfFile" 2> >(grep -v '^Lines' >&2) |
+    if [ "$bNorm" -eq 1 ]; then
+        bcftools norm -m- --force -a "$vcfFile" 2> >(grep -v '^Lines' >&2)
+    else 
+        cat "$vcfFile"
+    fi |
         bcftools query -f "%CHROM\t%POS\t%REF\t%ALT\n" - |
         awk -v slop=$((MaxHRUN * 2 + 2)) ' #Convert to bed region of interest
             BEGIN {OFS="\t"}
@@ -837,7 +845,7 @@ function AddHRUN2freebayes {
             {l=length($0); sub(substr($0,1,1)"+","",$0); print chrom,pos,l-length($0)}
         ' > "$tmpFile"; code="$?"
     if [ "$code" -ne 0 ]; then
-        Log ERROR "\tFailure to Calculate Freebayes HRUN for $id"
+        Log ERROR "\tFailure to Calculate $caller HRUN for $id"
         rm -f "$tmpFile"
         return "$EXIT_FAILURE"
     fi
