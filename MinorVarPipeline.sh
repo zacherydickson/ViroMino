@@ -872,14 +872,16 @@ function Call_ivar {
     local id=$1; shift
     local refFile=$1; shift
     local alnFile=$1; shift
-    local tmpTSV;
-    tmpTSV="$CallDir/ivar_${id}_$(RandomString 8).tmp.tsv"
+    local prefix;
+    prefix="$CallDir/ivar_${id}_$(RandomString 8).tmp"
+    local tmpTSV="$prefix.tsv"
     local tmpVCF;
     tmpVCF="$CallDir/ivar_${id}_$(RandomString 8).tmp.vcf"
     local code=0;
-    samtools mpileup -aa -A -d 0 -Q 0 --reference "$refFile" "$alnFile" |
-        ivar variants -p "$(basename "$tmpTSV" .tsv)" -q 0 -t 0 -m 0 -r "$refFile" \
-        2> >(grep -Pv '(sample in [0-9]+ input files)|(Max depth set to)|(A GFF file containing)'); code="$?"
+    samtools mpileup -aa -A -d 0 -Q 0 --reference "$refFile" "$alnFile" \
+        2> >(grep -Pv '(samples in [0-9]+ input files)|(Max depth set to)') |
+        ivar variants -p "$prefix" -q 0 -t 0 -m 0 -r "$refFile" \
+        2> >(grep -Pv '(A GFF file containing)'); code="$?"
     #Check if ivar worked before continuing
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tsamtools mpileup or ivar failure for $id"
