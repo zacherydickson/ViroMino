@@ -28,3 +28,5 @@ Version 0.6.3
 	Fixed Bug where reconciliation failed due to typo introduced in 0.6.1
 	Fixed Bug where genotypes at sites with multiple alleles where the reference fails the RPB filter are decremented
 	Handled Case where a called Genotype does not pass the RPB filter (discard site)
+Version 0.6.4
+	Refactor of code for adding HRUN to generalize
