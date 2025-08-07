@@ -17,6 +17,7 @@ source "$ExecDir/BashFunctionLibrary/functions/RandomString.sh"
 RPBCmd="$ExecDir/utils/AddRPBInfoTag.sh"
 PileupCmd="$ExecDir/utils/CustomPileup.pl"
 FilterVCFByRPBCmd="$ExecDir/utils/FilterVCFByRPB.awk"
+Ivar2VCFCmd="$ExecDir/utils/ivar2vcf.awk"
 VERSION="$(cat "$ExecDir/Version.txt")"
 
 ##Default Values
@@ -43,7 +44,7 @@ declare -A AlignedFileMap
 declare -A RawVCFMap
 declare -A FilteredVCFMap
 declare -a IDList
-declare -a VCallerList=(lofreq freebayes);
+declare -a VCallerList=(lofreq freebayes ivar);
 NCallers="${#VCallerList[@]}"
 declare -a PipelineStepList=(init process align errest call filter reconcile expand haplotype)
 declare -A PipelineStepIdxMap;
@@ -625,6 +626,9 @@ function Call {
         freebayes)
             callFunc="Call_freebayes"
             ;;
+        ivar)
+            callFunc="Call_ivar"
+            ;;
         *)
             Log ERROR "Unrecognized variant caller ($caller)"
             return "$(wc -l "$metaFile")"
@@ -849,12 +853,44 @@ function AddHRUN2freebayes {
         (HRUN[$1,$2]){$8=$8";HRUN="HRUN[$1,$2]}1
     ' "$tmpFile" "$vcfFile"; code="$?"
     if [ "$code" -ne 0 ]; then 
-        Log ERROR "\tFailure to add HRUN field to $vcfFile - Check $tmpFile"
+        Log ERROR "\tFailure to add $caller HRUN field to $vcfFile - Check $tmpFile"
         return "$EXIT_FAILURE"
     fi
     #Todo add the annotations to the vcf file
     rm -f "$tmpFile" 
 }
+
+function Call_ivar {
+    local id=$1; shift
+    local refFile=$1; shift
+    local alnFile=$1; shift
+    local tmpTSV;
+    tmpTSV="$CallDir/ivar_${id}_$(RandomString 8).tmp.tsv"
+    local tmpVCF;
+    tmpVCF="$CallDir/ivar_${id}_$(RandomString 8).tmp.vcf"
+    local code=0;
+    samtools mpileup -aa -A -d 0 -Q 0 --reference "$refFile" "$alnFile" |
+        ivar variants -p "$(basename "$tmpTSV" .tsv)" -q 0 -t 0 -m 0 -r "$refFile" \
+        2> >(grep -Pv '(sample in [0-9]+ input files)|(Max depth set to)|(A GFF file containing)'); code="$?"
+    #Check if ivar worked before continuing
+    if [ "$code" -ne 0 ]; then
+        Log ERROR "\tsamtools mpileup or ivar failure for $id"
+        rm -f "$tmpTSV";
+        return "$EXIT_FAILURE";
+    fi
+    #Convert the ivar tsv to a vcf and check to make sure that worked
+    if ! "$Ivar2VCFCmd" -v Ref="$(awk '{print $1":"$2; exit 0}' "$refFile.fai")" "$tmpTSV" >| "$tmpVCF"; then
+        Log ERROR "\tIvar2VCF or faidx index parsing error for $id - Check $tmpTSV"
+        rm -f "$tmpVCF"
+        return "$EXIT_FAILURE"
+    fi
+    if ! AddHRUN2VCF "$tmpVCF" "$refFile" "ivar" 0; then
+        Log ERROR "\tAddHRUN2VCF failure - Check $tmpVCF and $tmpTSV"
+        return "$EXIT_FAILURE"
+    fi
+    rm -f "$tmpTSV" "$tmpVCF"
+}
+
 
 #Runs a series of filters on a raw vcf files
 # The vcf files must have AD in the format field, and HRUN Info for Indels
