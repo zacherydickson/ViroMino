@@ -91,6 +91,7 @@ function usage {
 		"===OPTIONS\n" \
         "\t-c [1,$NCallers]εZ,[0,$NCallers]εZ=$MinRawCallers,$MinFiltCallers\tPair of values specifying the minimum number of callers supporting\n" \
         "\t\ta variant before and after filtering. MVs must pass both filters\n" \
+        "\t-e STR={${VCallerList[*]}}\tA comma separated list of enabled variant callers\n" \
         "\t-f STR\tForce execution of all steps including and after this one\n" \
         "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
         "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
@@ -121,7 +122,7 @@ function usage {
 
 function main {
     #Process Options
-    while getopts "c:f:l:m:M:p:q:r:s:t:w:x:FvVh" opts; do
+    while getopts "c:e:f:l:m:M:p:q:r:s:t:w:x:FvVh" opts; do
     	case $opts in
             c)
                 IFS="," read -r MinRawCallers MinFiltCallers <<< "$OPTARG";
@@ -135,6 +136,26 @@ function main {
                     Log WARNING "minFiltCallers ($MinFiltCallers) more than supported callers ($NCallers) - Using $NCallers"
                     MinFiltCallers="$NCallers"
                 fi
+                ;;
+            e)
+                IFS="," read -ra inCallers <<< "$OPTARG";
+                #Check that all requested variant callers are implemented
+                for inCaller in "${inCallers[@]}"; do
+                    bValid=0;
+                    for validCaller in "${VCallerList[@]}"; do
+                        if [ "$inCaller" -eq "$validCaller" ]; then
+                            bValid=1;
+                            break;
+                        fi
+                    done
+                    if [ "$bValid" -eq 0 ]; then
+                        Log ERROR "Attempt to enable unrecognized variant caller ($inCaller)";
+                        exit "$EXIT_FAILURE"
+                    fi
+                done
+                #Set the variant caller list
+                VCallerList=("${inCallers[@]}")
+                echo "${#VCallerList[@]} ${VCallerList[*]}"
                 ;;
             f)
                 ForceFrom="$OPTARG";
@@ -377,9 +398,10 @@ function CheckConfig {
     local excBedFile; excBedFile=$(readlink -f "$ExclusionBedFile");
     local voiFile; voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
+    local enabledCallers="${VCallerList[*]}"
     #If the Config File Doesn't exist it can be created
     if ! [ -s "$ConfigFile" ]; then
-        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
+        WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile" "$enabledCallers"; code="$?";
         return $code;
     fi
     #Iterate over the config file and check for differences
@@ -435,6 +457,10 @@ function CheckConfig {
                 target="$voiFile"
                 forceFromMin="expand";
                 ;;
+            enabledCallers)
+                target="$enabledCallers"
+                forceFromMin="call"
+                ;;
             minRawCallers)
                 target="$MinRawCallers"
                 forceFromMin="reconcile";
@@ -456,7 +482,7 @@ function CheckConfig {
             fi
         fi
     done < "$ConfigFile"
-    WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile"; code="$?";
+    WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile" "$enabledCallers"; code="$?";
 }
 
 function WriteConfig {
@@ -465,10 +491,12 @@ function WriteConfig {
     local refIndex="$1"; shift
     local excBedFile="$1"; shift
     local voiFile="$1"; shift
+    local enabledCallers="$1"; shift
     printf "%s\n" "Version=$VERSION" "metaFile=$metaFile" "refFile=$refFile" "refIndex=$refIndex" \
                     "readLen=$ReadLen" "macAlpha=$MACAlpha" "minMAF=$MinMAF" "maxRPB=$MaxRPB" \
                     "minMapQ=$MinMapQual" "maxHRUN=$MaxHRUN" "excludeBED=$excBedFile" \
                     "voiVCF=$voiFile" "minRawCallers=$MinRawCallers" "minFiltCallers=$MinFiltCallers" \
+                    "enabledCallers=$enabledCallers" \
         >| "$ConfigFile"
 }
 
@@ -879,9 +907,9 @@ function Call_ivar {
     tmpVCF="$CallDir/ivar_${id}_$(RandomString 8).tmp.vcf"
     local code=0;
     samtools mpileup -aa -A -d 0 -Q 0 --reference "$refFile" "$alnFile" \
-        2> >(grep -Pv '(samples in [0-9]+ input files)|(Max depth set to)') |
+        2> >(grep -Pv '(samples in [0-9]+ input files)|(Max depth set to)' >&2) |
         ivar variants -p "$prefix" -q 0 -t 0 -m 0 -r "$refFile" \
-        2> >(grep -Pv '(A GFF file containing)'); code="$?"
+        > >(grep -Pv '(A GFF file)' >&2); code="$?"
     #Check if ivar worked before continuing
     if [ "$code" -ne 0 ]; then
         Log ERROR "\tsamtools mpileup or ivar failure for $id"
