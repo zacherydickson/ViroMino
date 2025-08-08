@@ -61,8 +61,8 @@ MACAlpha=0.01
 MinMAF=0.01
 MaxRPB=75
 ReadLen=150
-MinRawCallers="$NCallers"
-MinFiltCallers="$NCallers"
+MinRawCallers=$((NCallers/2 + 1))
+MinFiltCallers=$((NCallers/2 +1 ))
 MaxPileupDepth=1000
 Verbose=0
 
@@ -91,7 +91,7 @@ function usage {
 		"===OPTIONS\n" \
         "\t-c [1,$NCallers]εZ,[0,$NCallers]εZ=$MinRawCallers,$MinFiltCallers\tPair of values specifying the minimum number of callers supporting\n" \
         "\t\ta variant before and after filtering. MVs must pass both filters\n" \
-        "\t-e STR=$(JoinBy , ${VCallerList[@]})\tA comma separated list of enabled variant callers\n" \
+        "\t-e STR=$(JoinBy , "${VCallerList[@]}")\tA comma separated list of enabled variant callers\n" \
         "\t-f STR\tForce execution of all steps including and after this one\n" \
         "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
         "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
@@ -397,7 +397,8 @@ function CheckConfig {
     local excBedFile; excBedFile=$(readlink -f "$ExclusionBedFile");
     local voiFile; voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
-    local enabledCallers=$(JoinBy , "${VCallerList[@]}")
+    local enabledCallers;
+    enabledCallers=$(JoinBy , "${VCallerList[@]}");
     #If the Config File Doesn't exist it can be created
     if ! [ -s "$ConfigFile" ]; then
         WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile" "$enabledCallers"; code="$?";
