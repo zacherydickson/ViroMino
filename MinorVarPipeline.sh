@@ -143,7 +143,7 @@ function main {
                 for inCaller in "${inCallers[@]}"; do
                     bValid=0;
                     for validCaller in "${VCallerList[@]}"; do
-                        if [ "$inCaller" -eq "$validCaller" ]; then
+                        if [ "$inCaller" == "$validCaller" ]; then
                             bValid=1;
                             break;
                         fi

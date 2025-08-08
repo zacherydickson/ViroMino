@@ -33,3 +33,5 @@ Version 0.6.4
 Version 0.7.0
         Added a third variant caller, ivar, to the pipeline
         Added option to decide which variant callers to enable, with all on by default
+Version 0.7.1
+	Bug fix in validating enabled callers
