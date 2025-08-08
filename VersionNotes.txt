@@ -30,5 +30,6 @@ Version 0.6.3
 	Handled Case where a called Genotype does not pass the RPB filter (discard site)
 Version 0.6.4
 	Refactor of code for adding HRUN to generalize
-Version 0.6.4+ivar
+Version 0.7.0
         Added a third variant caller, ivar, to the pipeline
+        Added option to decide which variant callers to enable, with all on by default
