@@ -91,7 +91,7 @@ function usage {
 		"===OPTIONS\n" \
         "\t-c [1,$NCallers]εZ,[0,$NCallers]εZ=$MinRawCallers,$MinFiltCallers\tPair of values specifying the minimum number of callers supporting\n" \
         "\t\ta variant before and after filtering. MVs must pass both filters\n" \
-        "\t-e STR={${VCallerList[*]}}\tA comma separated list of enabled variant callers\n" \
+        "\t-e STR=$(JoinBy , ${VCallerList[@]})\tA comma separated list of enabled variant callers\n" \
         "\t-f STR\tForce execution of all steps including and after this one\n" \
         "\t\tSTR must be one of ${PipelineStepList[*]}\n" \
         "\t-l [1,∞)εZ=$ReadLen\tThe length of input reads\n" \
@@ -155,7 +155,6 @@ function main {
                 done
                 #Set the variant caller list
                 VCallerList=("${inCallers[@]}")
-                echo "${#VCallerList[@]} ${VCallerList[*]}"
                 ;;
             f)
                 ForceFrom="$OPTARG";
@@ -398,7 +397,7 @@ function CheckConfig {
     local excBedFile; excBedFile=$(readlink -f "$ExclusionBedFile");
     local voiFile; voiFile=$(readlink -f "$VariantsOfInterestFile");
     local code=0;
-    local enabledCallers="${VCallerList[*]}"
+    local enabledCallers=$(JoinBy , "${VCallerList[@]}")
     #If the Config File Doesn't exist it can be created
     if ! [ -s "$ConfigFile" ]; then
         WriteConfig "$metaFile" "$refFile" "$refIndex" "$excBedFile" "$voiFile" "$enabledCallers"; code="$?";
